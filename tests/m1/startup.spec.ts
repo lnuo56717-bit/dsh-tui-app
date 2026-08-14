@@ -13,7 +13,7 @@ describe('M1 command grammar', () => {
     const program = tuiCommand().exitOverride()
     let parsed: unknown
     program.action(options => { parsed = options })
-    program.parse(['--theme', 'mono', '--color', 'none', '--resume', 'session-1'], { from: 'user' })
-    expect(parsed).toMatchObject({ theme: 'mono', color: 'none', resume: 'session-1' })
+    program.parse(['--theme', 'pearl', '--color', 'mono', '--resume', 'session-1'], { from: 'user' })
+    expect(parsed).toMatchObject({ theme: 'pearl', color: 'mono', resume: 'session-1' })
   })
 })

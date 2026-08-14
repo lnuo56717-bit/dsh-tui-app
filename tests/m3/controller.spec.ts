@@ -57,7 +57,7 @@ function fixture() {
 describe('M3 interaction controller', () => {
   it('submits real user messages, resolves approvals, and answers structured questions', async () => {
     const fx = fixture()
-    const controller = new InteractionController(fx.ctx, 'deep-ocean')
+    const controller = new InteractionController(fx.ctx, 'abyss')
     await controller.start()
     controller.submit('继续追问：中文 🐋')
     controller.submit('立即修正', true)
@@ -82,7 +82,7 @@ describe('M3 interaction controller', () => {
 
   it('uses agents.resume and keeps dsh/local command collisions explicit', async () => {
     const fx = fixture()
-    const controller = new InteractionController(fx.ctx, 'deep-ocean')
+    const controller = new InteractionController(fx.ctx, 'abyss')
     await controller.start('session-existing')
     expect(fx.resumed).toEqual(['session-existing'])
     expect(controller.commandChoices().filter(item => item.name === 'plan')).toEqual([

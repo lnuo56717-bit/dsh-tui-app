@@ -7,6 +7,7 @@ describe('M1 terminal lease', () => {
     const lease = enterFullscreen({ write: (chunk: string | Uint8Array) => { output += String(chunk); return true } } as NodeJS.WriteStream)
     lease.release()
     lease.release()
+    expect(terminalSequences.LEAVE_ALT).toContain(terminalSequences.RESET_CURSOR_COLOR)
     expect(output).toBe(terminalSequences.ENTER_ALT + terminalSequences.LEAVE_ALT)
   })
 })

@@ -1,15 +1,23 @@
 # dsh-tui-app
 
-An out-of-tree, same-process full-screen TUI bundle for DeepSeek Harness. The M3 build adds a grapheme-safe composer, dsh/local slash-command discovery, approval and question cards, permission presets, and durable session resume/switching to the M2 event renderer. The Chafa-generated DeepSeek whale remains the single visual signature.
+`dsh-tui-app` is an independent, out-of-tree full-screen terminal interface for DeepSeek Harness. It runs in the same process as the existing `dsh` host, reads the durable session event stream directly, and uses host projections only for auxiliary status facts. The Chafa-generated DeepSeek whale is its one visual signature.
 
-## Requirements
+## What ships
 
-- The existing `dsh` launcher (this project does not install or replace it)
-- Node.js 22 or newer
-- pnpm available to `dsh plugin`
-- An interactive terminal; Windows Terminal is the validated Windows host
+- Streaming transcript reconciliation, terminal Markdown, tool trees, diffs, workflows/jobs, raw-event fallback, and grapheme-safe CJK layout.
+- Multiline prompt editing, queued follow-ups, explicit steering, dsh/local slash-command discovery, approvals, structured questions, and durable resume/switch.
+- Projection-backed model/session/permission/token/context/stats/plan/todo status. Missing capabilities stay hidden; no cost or billing data is invented.
+- Abyss and Pearl themes with explicit truecolor, 256-color, 16-color, and monochrome palettes. `auto` safely defaults to Abyss when terminal background cannot be determined without a query.
+- A Chafa 1.18.2-generated, three-blue-tier ASCII whale on empty wide sessions; Chafa is not a runtime dependency.
 
-## Build and install
+## Requirements and installation
+
+This project uses the `dsh` already installed on the machine. It does not download, replace, patch, or vendor Harness.
+
+- Existing DeepSeek Harness `dsh` launcher with the npm `0.1.0-rc.6` artifact set
+- Node.js 22 or newer (Node.js 24 is used in CI)
+- npm and pnpm available to the `dsh plugin` workflow
+- Windows Terminal on Windows; modern xterm-compatible terminals are best effort on other systems
 
 ```powershell
 npm install
@@ -17,58 +25,85 @@ npm run build
 dsh plugin --profile tui add "C:\absolute\path\to\dsh-tui-app"
 dsh --profile tui --help
 dsh --profile tui
+```
+
+The plugin creates/updates the isolated `tui` profile with `@deepseek-ai/dsh-base` followed by `dsh-tui-app`; it does not edit the Harness checkout. Resume a durable session with:
+
+```powershell
 dsh --profile tui --resume <session-id>
 ```
 
-`dsh plugin` initializes the `tui` profile with `@deepseek-ai/dsh-base`, installs this local bundle out of tree, and appends `dsh-tui-app` to the profile bundle list. It does not change Harness source.
+The direct dsh package dependencies are exactly `0.1.0-rc.6`: `dsh-agent`, `dsh-agent-default-model`, `dsh-cmdline`, and `dsh-session`. Their registry integrity values and every consumed host contract are recorded in [PROVENANCE.md](./PROVENANCE.md). Detailed setup and diagnostics are in [INSTALL.md](./INSTALL.md).
 
-Flags are `--resume`, `--theme`, and `--color`. `--resume` loads durable history through `agents.resume`; it does not reconstruct transcript text from projections.
+## Flags
 
-## Keys
+| Flag | Values | Default |
+|---|---|---|
+| `--resume <session-id>` | opaque durable session id | new session |
+| `--theme <name>` | `abyss`, `pearl`, `auto` | `auto` |
+| `--color <mode>` | `truecolor`, `256`, `16`, `mono`, `auto` | `auto` |
 
-| Key | M3 action |
+`NO_COLOR` always forces monochrome, regardless of `--color`. `/theme abyss|pearl|auto` previews a theme immediately for the current TUI run.
+
+## Keyboard reference
+
+| Key | Action |
 |---|---|
-| `Enter` | send a prompt or queued follow-up |
+| `Enter` | send a normal prompt/follow-up; insert newline in multiline mode |
 | `Ctrl+M` / `Alt+Enter` | toggle multiline / send multiline |
 | `Ctrl+L` | steer the current or next step |
-| `Ctrl+P` / `?` | open command sonar |
+| `Ctrl+W`, `Ctrl+U`, `Ctrl+K` | delete word / to line start / to line end |
+| `Ctrl+P` or `?` | open fuzzy dsh + local command palette |
 | `Ctrl+S` | open persisted session picker |
-| `Shift+Tab` | cycle advertised permission presets |
-| `Tab` | move between composer, blocking card, and scrollback |
-| `PgUp` / `PgDn` | page transcript scrollback |
-| `Ctrl+X` | show key reference |
-| `Ctrl+C` | cancel running turn; clear draft; press twice on idle/empty to quit |
+| `Ctrl+X` | open the complete in-app key page |
+| `Shift+Tab` | cycle only permission presets advertised by dsh |
+| `Tab` | move between composer, blocking card, and transcript |
+| `PgUp`, `PgDn` | page transcript scrollback |
+| `Ctrl+U`, `Ctrl+D` | half-page scroll while transcript is focused |
+| `Esc` | close an overlay or park a blocking card without answering it |
+| `Ctrl+C` | cancel a running turn; otherwise clear draft; press twice when idle/empty to quit |
 
-Approval cards accept `y`/`1` (allow once), `n`/`2` (reject), or `3` (change preset, then allow once). Question cards use arrows, digits, Space for multi-select, `z` for free text, and Enter to advance/submit. Esc parks a blocking card without fabricating an answer.
+Approvals use `y`/`1` (allow once), `n`/`2` (reject), or `3` (change the real permission preset and then allow once). Questions use arrows, digits, Space for multi-select, `z` for free text, and Enter to advance/submit.
 
-## Development
+Useful local commands include `/new`, `/resume`, `/session-info`, `/rename`, `/model`, `/theme`, `/workflows`, `/keys`, `/help`, and `/quit`. Commands advertised by dsh execute through the host command registry; exact-name collisions remain visibly separate as `[dsh]` and `[tui]` entries.
+
+## Web UI comparison
+
+| Capability | dsh-tui v1 | Harness Web UI |
+|---|---|---|
+| One active root session, new/resume/switch | Yes | Yes |
+| Streaming messages, tools, diffs, workflows | Terminal-native compact tree | Rich browser presentation |
+| Approvals and structured user questions | Keyboard-first, fail-closed | Browser controls |
+| Projection status (tokens/context/stats/plan/todos) | Compact footer + `/session-info` | Rich panels |
+| Themes | Abyss/Pearl + capability fallbacks | Browser theme system |
+| CJK and grapheme-safe editing | Yes, Windows Terminal validated | Browser text engine |
+| Image/media rendering | Metadata placeholder only | Rich media surfaces |
+| Mouse, transcript search, multi-root dashboard | Not in v1 | Available or better suited to Web UI |
+| Remote/browser attachment and DOM slots | Deliberately not used | Native architecture |
+
+## Responsive behavior
+
+At 120×40 the transcript remains the dominant continuous surface. At 80×24 the header collapses to the title, tool/workflow cards become one-line summaries, and the help row shows three context-relevant keys. Below 60 columns borders use plain ASCII and long cwd/title/status text is middle-ellipsized by terminal display cells. Detailed token composition remains available in `/session-info`.
+
+## Development and acceptance
 
 ```powershell
 npm run check
 npm test
-npm run test:ac
-npm run test:ac:m2
-npm run test:ac:m3
+npm run build
+npm run test:ac:all
 ```
 
-The colored whale is generated at build time from the official DeepSeek GitHub avatar using Chafa 1.18.2. See `NOTICE` and `PROVENANCE.md`. Chafa is not a runtime dependency.
+The full local acceptance requires the existing `dsh` launcher for AC-1 through AC-5. CI runs the static M4 suite on `windows-latest`; real-profile PTY acceptance remains a local/release gate because CI does not install another Harness copy.
 
-## M3 behavior
+## Known limitations
 
-- The transcript subscribes before reading the immutable session snapshot, buffers the live edge, de-duplicates by `seq`, and requests a re-snapshot on a gap.
-- Assistant chunks reconcile in place and are superseded by the committed assistant message without a duplicate frame.
-- Markdown is tokenized without executing HTML. CJK wrapping and clipping operate on grapheme clusters and terminal display cells.
-- Tool calls/results, Code Mode children, diffs, workflows, and selected runtime activities render as compact trees.
-- Unknown future events render once as raw placeholders instead of crashing the process.
-- Human input becomes a real identified `UserMessage` and enters through `agent.followup` or the explicit `agent.steer` action; the UI never appends chat events itself.
-- The slash menu keeps dsh and local descriptors separate when names collide. Advertised dsh commands execute through the command registry and retain durable run/done events.
-- Approval outcomes are fail-closed and limited to the upstream vocabulary. Preset escalation changes the real permission service before allowing the current request.
-- Session switching detaches the old transcript, disposes the owned handle, and resumes exactly one selected persisted root.
+- Windows Terminal is the supported Windows emulator; legacy conhost is best-effort monochrome.
+- Reasoning stays collapsed to a bounded disclosure; transcript block expansion and mouse interaction are not v1 features.
+- `@` remains ordinary prompt text because rc.6 has no host-safe general attachment-picker seam.
+- Images render as attachment labels, not terminal pixels. The whale is a pre-generated ASCII asset.
+- No transcript-content search, multi-root dashboard, remote attach, ACP bridge, persistent per-command grants, or invented `/auto` policy.
+- Workflow/subagent views are read-only durable summaries. They do not dispatch concurrent root sessions.
+- `auto` does not send a blocking terminal-background query; when detection is unreliable it chooses Abyss.
 
-## M3 limitations
-
-- Reasoning is intentionally collapsed to a one-line disclosure in this milestone.
-- `@` remains plain text because rc.6 exposes no host-safe general attachment picker seam.
-- Projection-rich status details, final theme polish, and exhaustive 80×24 CJK QA are M4 work.
-- Mouse support, transcript search, and multi-root awareness remain P2.
-- This independent project is not affiliated with or endorsed by DeepSeek.
+This project is independent and is not affiliated with or endorsed by DeepSeek. Logo provenance and trademark boundaries are documented in [NOTICE](./NOTICE) and [PROVENANCE.md](./PROVENANCE.md).

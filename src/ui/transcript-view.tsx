@@ -5,7 +5,7 @@ import { takeCells } from './display-width.js'
 import { markdownToLines, type SegmentTone, type StyledLine } from './markdown.js'
 import type { Theme } from './theme.js'
 
-function toneColor(tone: SegmentTone, theme: Theme): string {
+function toneColor(tone: SegmentTone, theme: Theme): Theme['text'] {
   if (tone === 'muted') return theme.muted
   if (tone === 'accent' || tone === 'link') return theme.accent
   if (tone === 'code') return theme.user
@@ -88,31 +88,34 @@ function DiffView({ diff, width, theme }: { diff: string; width: number; theme: 
   })}</Box>
 }
 
-function statusGlyph(node: ToolNode, theme: Theme): { glyph: string; color: string } {
+function statusGlyph(node: ToolNode, theme: Theme): { glyph: string; color: Theme['text'] } {
   if (node.status === 'running') return { glyph: '◌', color: theme.accent }
   if (node.status === 'success') return { glyph: '✓', color: theme.success }
   if (node.status === 'error') return { glyph: '×', color: theme.danger }
   return { glyph: '!', color: theme.warning }
 }
 
-function ToolView({ node, width, theme, depth = 0 }: { node: ToolNode; width: number; theme: Theme; depth?: number }): React.JSX.Element {
+function ToolView({ node, width, theme, compact, depth = 0 }: { node: ToolNode; width: number; theme: Theme; compact: boolean; depth?: number }): React.JSX.Element {
   const status = statusGlyph(node, theme)
   const branch = depth === 0 ? '└─' : '  ├─'
   const diff = findDiff(node.meta) ?? findDiff(node.result)
+  const summary = argumentsSummary(node.arguments, width - node.name.length - 10)
+  if (compact) return <Text><Text color={theme.border}>{branch} </Text><Text color={status.color}>{status.glyph} </Text><Text bold color={theme.text}>{node.name}</Text><Text color={theme.muted}>  {summary}</Text></Text>
   return (
     <Box flexDirection="column" marginBottom={depth === 0 ? 1 : 0}>
-      <Text><Text color={theme.border}>{branch} </Text><Text color={status.color}>{status.glyph} </Text><Text bold color={theme.text}>{node.name}</Text><Text color={theme.muted}>  {argumentsSummary(node.arguments, width - node.name.length - 10)}</Text></Text>
+      <Text><Text color={theme.border}>{branch} </Text><Text color={status.color}>{status.glyph} </Text><Text bold color={theme.text}>{node.name}</Text><Text color={theme.muted}>  {summary}</Text></Text>
       {diff !== undefined ? <Box paddingLeft={4}><DiffView diff={diff} width={Math.max(8, width - 4)} theme={theme} /></Box> : node.result.map((block, index) => (
         <Box key={index} paddingLeft={4}><BlockView block={block} width={Math.max(8, width - 4)} theme={theme} toolIndex={{}} /></Box>
       ))}
       {node.meta !== undefined && diff === undefined && <Text color={theme.muted}>    raw metadata  {takeCells(safeJson(node.meta), Math.max(0, width - 18)).head}</Text>}
-      {node.children.map(child => <Box key={child.id} paddingLeft={2}><ToolView node={child} width={Math.max(8, width - 2)} theme={theme} depth={depth + 1} /></Box>)}
+      {node.children.map(child => <Box key={child.id} paddingLeft={2}><ToolView node={child} width={Math.max(8, width - 2)} theme={theme} compact={compact} depth={depth + 1} /></Box>)}
     </Box>
   )
 }
 
-function WorkflowView({ node, width, theme }: { node: WorkflowNode; width: number; theme: Theme }): React.JSX.Element {
+function WorkflowView({ node, width, theme, compact }: { node: WorkflowNode; width: number; theme: Theme; compact: boolean }): React.JSX.Element {
   const color = node.status === 'running' ? theme.accent : node.status === 'success' ? theme.success : node.status === 'error' ? theme.danger : theme.warning
+  if (compact) return <Text color={color}>◇ workflow  <Text bold>{node.name}</Text>  {node.status} · {node.children.length} jobs</Text>
   return (
     <Box flexDirection="column" marginBottom={1}>
       <Text color={color}>◇ workflow  <Text bold>{node.name}</Text>  {node.status}</Text>
@@ -125,10 +128,10 @@ function safeJson(value: unknown): string {
   try { return JSON.stringify(value) ?? String(value) } catch { return '[unserializable]' }
 }
 
-function NodeView({ node, width, theme, state }: { node: TranscriptNode; width: number; theme: Theme; state: TranscriptState }): React.JSX.Element {
+function NodeView({ node, width, theme, state, compact }: { node: TranscriptNode; width: number; theme: Theme; state: TranscriptState; compact: boolean }): React.JSX.Element {
   if (node.kind === 'message') return <MessageView node={node} width={width} theme={theme} toolIndex={state.toolIndex} />
-  if (node.kind === 'tool') return <ToolView node={node} width={width} theme={theme} />
-  if (node.kind === 'workflow') return <WorkflowView node={node} width={width} theme={theme} />
+  if (node.kind === 'tool') return <ToolView node={node} width={width} theme={theme} compact={compact} />
+  if (node.kind === 'workflow') return <WorkflowView node={node} width={width} theme={theme} compact={compact} />
   if (node.kind === 'activity') {
     const color = node.status === 'error' ? theme.danger : node.status === 'success' ? theme.success : theme.accent
     return <Text color={color}>· {node.activity}  {node.label}  {node.status}</Text>
@@ -136,14 +139,14 @@ function NodeView({ node, width, theme, state }: { node: TranscriptNode; width: 
   return <Text color={node.required ? theme.danger : theme.warning}>raw event #{node.seq} · {node.eventType}  {takeCells(safeJson(node.data), Math.max(0, width - node.eventType.length - 22)).head}</Text>
 }
 
-export function TranscriptView({ state, width, nodeBudget, offset, theme }: { state: TranscriptState; width: number; nodeBudget: number; offset: number; theme: Theme }): React.JSX.Element {
+export function TranscriptView({ state, width, nodeBudget, offset, theme, compact = false }: { state: TranscriptState; width: number; nodeBudget: number; offset: number; theme: Theme; compact?: boolean }): React.JSX.Element {
   const end = Math.max(0, state.nodes.length - offset)
   const start = Math.max(0, end - Math.max(1, nodeBudget))
   const visible = state.nodes.slice(start, end)
   return (
     <Box flexDirection="column">
       {start > 0 && <Text color={theme.muted}>↑ {start} earlier nodes</Text>}
-      {visible.length === 0 ? <Text color={theme.muted}>Event plane ready · waiting for a prompt</Text> : visible.map(node => <NodeView key={node.id} node={node} width={width} theme={theme} state={state} />)}
+      {visible.length === 0 ? <Text color={theme.muted}>Event plane ready · waiting for a prompt</Text> : visible.map(node => <NodeView key={node.id} node={node} width={width} theme={theme} state={state} compact={compact} />)}
       {offset > 0 && <Text color={theme.muted}>↓ {offset} newer nodes</Text>}
     </Box>
   )

@@ -6,8 +6,8 @@ export const name = 'tui-startup'
 export const inject = ['cmdlineArgs']
 export const TUI_STARTUP_SERVICE = 'tuiStartup'
 
-export type ThemeName = 'deep-ocean' | 'mono'
-export type ColorMode = 'auto' | 'truecolor' | '256' | '16' | 'none'
+export type ThemeName = 'auto' | 'abyss' | 'pearl'
+export type ColorMode = 'auto' | 'truecolor' | '256' | '16' | 'mono'
 
 export interface TuiStartupValues {
   resume?: string
@@ -27,10 +27,10 @@ export function tuiCommand(): Command {
     .description('Launch the DeepSeek Harness full-screen terminal interface.')
     .helpOption('-h, --help', 'show TUI help')
     .option('--resume <session-id>', 'resume a durable session')
-    .addOption(new Option('--theme <name>', 'select a TUI theme').choices(['deep-ocean', 'mono']).default('deep-ocean'))
-    .addOption(new Option('--color <mode>', 'force terminal color capability').choices(['auto', 'truecolor', '256', '16', 'none']).default('auto'))
+    .addOption(new Option('--theme <name>', 'select a TUI theme').choices(['abyss', 'pearl', 'auto']).default('auto'))
+    .addOption(new Option('--color <mode>', 'force terminal color capability').choices(['auto', 'truecolor', '256', '16', 'mono']).default('auto'))
     .addHelpText('after', `
-M3 controls:
+Core controls:
   Enter             send prompt
   Ctrl+P, Ctrl+S    commands, sessions
   Ctrl+M, Alt+Enter multiline, send multiline
@@ -39,7 +39,8 @@ M3 controls:
 Examples:
   dsh --profile tui
   dsh --profile tui --resume <session-id>
-  dsh --profile tui --theme mono --color none
+  dsh --profile tui --theme pearl --color 256
+  NO_COLOR=1 dsh --profile tui --color mono
 `)
 }
 

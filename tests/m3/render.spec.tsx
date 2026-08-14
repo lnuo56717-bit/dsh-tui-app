@@ -16,12 +16,12 @@ function controller(snapshot: RuntimeSnapshot): InteractionController {
 
 const base: RuntimeSnapshot = {
   sessionId: 'session-m3', cwd: 'C:\\work', model: 'mock/whale', agentStatus: 'running', permission: 'workspace-write',
-  theme: 'deep-ocean', notice: undefined, error: undefined, approval: undefined, questions: undefined,
+  projection: undefined, theme: 'abyss', notice: undefined, error: undefined, approval: undefined, questions: undefined,
 }
 
 describe('M3 blocking-card presentation', () => {
   it('renders an approval card with fail-closed choices inside 120 columns', () => {
-    const frame = renderToString(<Shell theme="deep-ocean" color="none" controller={controller({
+    const frame = renderToString(<Shell theme="abyss" color="mono" controller={controller({
       ...base, approval: { id: 1, toolName: 'bash', callId: 'call-1', reason: '写入 文件.txt' },
     })} />, { columns: 120 }).replace(ansi, '')
     expect(frame).toContain('PERMISSION REQUIRED · bash')
@@ -31,7 +31,7 @@ describe('M3 blocking-card presentation', () => {
   })
 
   it('renders plan-review intent without inferring approval from option order', () => {
-    const frame = renderToString(<Shell theme="deep-ocean" color="none" controller={controller({
+    const frame = renderToString(<Shell theme="abyss" color="mono" controller={controller({
       ...base,
       questions: { id: 2, questions: [{
         id: 'plan', header: 'PLAN REVIEW', question: '采用这个计划吗？', detail: '两步执行', multiSelect: false,

@@ -1,5 +1,6 @@
 const ENTER_ALT = '\u001B[?1049h\u001B[?25l'
-const LEAVE_ALT = '\u001B[?25h\u001B[?1049l'
+const RESET_CURSOR_COLOR = '\u001B]112\u0007'
+const LEAVE_ALT = `${RESET_CURSOR_COLOR}\u001B[?25h\u001B[?1049l`
 
 export interface TerminalLease {
   release(): void
@@ -17,4 +18,4 @@ export function enterFullscreen(output: Pick<NodeJS.WriteStream, 'write'> = proc
   }
 }
 
-export const terminalSequences = { ENTER_ALT, LEAVE_ALT }
+export const terminalSequences = { ENTER_ALT, RESET_CURSOR_COLOR, LEAVE_ALT }

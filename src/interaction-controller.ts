@@ -4,6 +4,9 @@ import {
 } from '@deepseek-ai/dsh-agent'
 import { randomUUID } from 'node:crypto'
 import { SessionId, type SessionHeader, type UserMessage } from '@deepseek-ai/dsh-session'
+import {
+  attachProjections, type AttachedProjections, type ProjectionRegistryLike, type ProjectionSnapshotView,
+} from './projection-store.js'
 import type { ThemeName } from './startup.js'
 import { EMPTY_TRANSCRIPT } from './transcript-fold.js'
 import { attachTranscript, TranscriptStore, type AttachedTranscript } from './transcript-store.js'
@@ -56,12 +59,25 @@ export interface SessionChoice {
   readonly createdAt: number
 }
 
+export interface SubagentChoice {
+  readonly kind: 'child' | 'diagnostic'
+  readonly id: string
+  readonly parentId: string
+  readonly depth: number
+  readonly activity?: 'running' | 'inactive'
+  readonly mode?: 'one-shot' | 'continuable'
+  readonly label?: string
+  readonly reason?: 'corrupt' | 'unsupported' | 'unavailable'
+  readonly hasChildren?: boolean
+}
+
 export interface RuntimeSnapshot {
   readonly sessionId: string | undefined
   readonly cwd: string
   readonly model: string
   readonly agentStatus: 'idle' | 'running' | 'starting' | 'switching'
   readonly permission: string | undefined
+  readonly projection: ProjectionSnapshotView | undefined
   readonly theme: ThemeName
   readonly notice: string | undefined
   readonly error: string | undefined
@@ -130,6 +146,13 @@ interface DefaultModelService {
   currentSelection(): ModelSelection
   saveSelection(next: ModelSelection): Promise<void>
 }
+interface SubagentService {
+  listDescendants(rootSessionId: ReturnType<typeof SessionId>, signal?: AbortSignal): Promise<Array<{
+    kind: 'child' | 'diagnostic'; id: ReturnType<typeof SessionId>; parentId: ReturnType<typeof SessionId>; depth: number
+    activity?: 'running' | 'inactive'; mode?: 'one-shot' | 'continuable'; label?: string
+    reason?: 'corrupt' | 'unsupported' | 'unavailable'; hasChildren?: boolean
+  }>>
+}
 
 const LOCAL_COMMANDS: readonly CommandChoice[] = [
   { name: 'quit', description: 'Exit and restore the terminal', source: 'tui' },
@@ -140,13 +163,13 @@ const LOCAL_COMMANDS: readonly CommandChoice[] = [
   { name: 'resume', description: 'Open the persisted session picker', source: 'tui' },
   { name: 'session-info', description: 'Show facts about this session', source: 'tui' },
   { name: 'rename', description: 'Rename this session', source: 'tui', inputHint: 'title' },
-  { name: 'theme', description: 'Switch deep-ocean or mono theme', source: 'tui', inputHint: 'deep-ocean | mono' },
+  { name: 'theme', description: 'Switch Abyss, Pearl, or automatic theme', source: 'tui', inputHint: 'abyss | pearl | auto' },
   { name: 'model', description: 'Save the next-session default model', source: 'tui', inputHint: 'provider/model' },
   { name: 'always-approve', description: 'Select danger-full-access after explicit confirmation', source: 'tui' },
   { name: 'workflows', description: 'Summarize durable workflow runs', source: 'tui' },
 ] as const
 
-export type LocalCommandAction = 'none' | 'quit' | 'help' | 'keys' | 'sessions' | 'confirm-danger' | 'confirm-new'
+export type LocalCommandAction = 'none' | 'quit' | 'help' | 'keys' | 'sessions' | 'session-info' | 'workflows' | 'confirm-danger' | 'confirm-new'
 
 export class InteractionController {
   readonly transcript = new TranscriptStore()
@@ -155,6 +178,7 @@ export class InteractionController {
   private snapshot: RuntimeSnapshot
   private handle: AgentHandle | undefined
   private attached: AttachedTranscript | undefined
+  private projections: AttachedProjections | undefined
   private questionProviderDispose: (() => void) | undefined
   private approval: ApprovalPending | undefined
   private questions: QuestionsPending | undefined
@@ -166,7 +190,7 @@ export class InteractionController {
     const selection = this.modelService().currentSelection()
     this.snapshot = {
       sessionId: undefined, cwd: process.cwd(), model: `${selection.provider}/${selection.model}`, agentStatus: 'starting',
-      permission: undefined, theme, notice: undefined, error: undefined, approval: undefined, questions: undefined,
+      permission: undefined, projection: undefined, theme, notice: undefined, error: undefined, approval: undefined, questions: undefined,
     }
   }
 
@@ -220,6 +244,10 @@ export class InteractionController {
     await handle.agent.whenIdle()
     this.handle = handle
     this.attached = attachTranscript(handle.agent.ctx, handle.agent.session, this.transcript)
+    const projectionRegistry = this.ctx.get('sessionProjections') as ProjectionRegistryLike<Agent['session']> | undefined
+    if (projectionRegistry !== undefined) {
+      this.projections = attachProjections(projectionRegistry, handle.agent.session, projection => this.patch({ projection }))
+    }
     this.patch({
       sessionId: String(handle.agent.session.id), cwd: handle.agent.session.header.cwd ?? process.cwd(),
       model: `${selection.provider}/${selection.model}`, agentStatus: handle.agent.status,
@@ -235,7 +263,10 @@ export class InteractionController {
     this.settleBlocking('unavailable')
     this.attached?.dispose()
     this.attached = undefined
+    this.projections?.dispose()
+    this.projections = undefined
     this.transcript.replace(EMPTY_TRANSCRIPT)
+    this.patch({ projection: undefined })
     await Promise.resolve()
     await this.handle?.dispose()
     this.handle = undefined
@@ -305,9 +336,7 @@ export class InteractionController {
       await this.switchSession(); return 'none'
     }
     if (name === 'session-info') {
-      const agent = this.handle?.agent
-      this.patch({ notice: agent === undefined ? 'No active session' : `${agent.id} · ${agent.session.header.cwd ?? 'cwd unknown'} · ${this.snapshot.model} · ${this.currentPermission() ?? 'permission unavailable'}` })
-      return 'none'
+      return this.handle === undefined ? this.fail('No active session') : 'session-info'
     }
     if (name === 'rename') {
       if (input === '') return this.fail('Usage: /rename <title>')
@@ -318,7 +347,7 @@ export class InteractionController {
       return 'none'
     }
     if (name === 'theme') {
-      if (input !== 'deep-ocean' && input !== 'mono') return this.fail('Usage: /theme deep-ocean|mono')
+      if (input !== 'abyss' && input !== 'pearl' && input !== 'auto') return this.fail('Usage: /theme abyss|pearl|auto')
       this.patch({ theme: input, notice: `Theme changed to ${input}`, error: undefined })
       return 'none'
     }
@@ -332,9 +361,7 @@ export class InteractionController {
     }
     if (name === 'always-approve') return 'confirm-danger'
     if (name === 'workflows') {
-      const count = this.transcript.getSnapshot().nodes.filter(node => node.kind === 'workflow').length
-      this.patch({ notice: `${count} durable workflow run${count === 1 ? '' : 's'} in this transcript` })
-      return 'none'
+      return 'workflows'
     }
     if (name === 'auto' || name === 'view-plan' || name === 'dashboard') return this.fail(`/${name} is not available in dsh rc.6`)
     return this.fail(`Unknown local command: /${name}`)
@@ -346,6 +373,20 @@ export class InteractionController {
     const rows = await persistence.list()
     return rows.map(header => ({ id: String(header.id), cwd: header.cwd, createdAt: header.createdAt }))
       .sort((left, right) => right.createdAt - left.createdAt)
+  }
+
+  async listSubagents(): Promise<SubagentChoice[]> {
+    const service = this.ctx.get('subagents') as SubagentService | undefined
+    if (service === undefined || this.handle === undefined) return []
+    const rows = await service.listDescendants(this.handle.agent.session.id)
+    return rows.map(row => ({
+      kind: row.kind, id: String(row.id), parentId: String(row.parentId), depth: row.depth,
+      ...(row.activity === undefined ? {} : { activity: row.activity }),
+      ...(row.mode === undefined ? {} : { mode: row.mode }),
+      ...(row.label === undefined ? {} : { label: row.label }),
+      ...(row.reason === undefined ? {} : { reason: row.reason }),
+      ...(row.hasChildren === undefined ? {} : { hasChildren: row.hasChildren }),
+    }))
   }
 
   permissionNames(): readonly string[] {
@@ -481,6 +522,8 @@ export class InteractionController {
     this.questionProviderDispose = undefined
     this.attached?.dispose()
     this.attached = undefined
+    this.projections?.dispose()
+    this.projections = undefined
     await this.handle?.dispose()
     this.handle = undefined
   }

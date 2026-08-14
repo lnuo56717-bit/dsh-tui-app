@@ -2,12 +2,13 @@ import React, { useEffect, useMemo, useState, useSyncExternalStore } from 'react
 import { Box, Text, useApp, useInput, useWindowSize } from 'ink'
 import type { TuiStartupValues } from '../startup.js'
 import {
-  type CommandChoice, InteractionController, type QuestionAnswerItem, type RuntimeSnapshot, type SessionChoice,
+  type CommandChoice, InteractionController, type QuestionAnswerItem, type RuntimeSnapshot, type SessionChoice, type SubagentChoice,
 } from '../interaction-controller.js'
 import { TranscriptStore } from '../transcript-store.js'
 import { cursorParts, deleteForward, deleteToEnd, deleteToStart, deleteWord, EMPTY_EDITOR, backspace, insertText, moveCursor, moveCursorTo, type EditorState } from './editor.js'
-import { graphemes } from './display-width.js'
+import { graphemes, middleEllipsis } from './display-width.js'
 import { Logo } from './logo.js'
+import { projectionValue, sessionInfoLines, sessionTitle, statusSegments } from './status.js'
 import { resolveTheme, type Theme } from './theme.js'
 import { TranscriptView } from './transcript-view.js'
 
@@ -22,7 +23,8 @@ type Overlay =
   | { kind: 'commands'; selected: number }
   | { kind: 'sessions'; selected: number; loading: boolean; items: SessionChoice[] }
   | { kind: 'permissions'; selected: number; forApproval: boolean }
-  | { kind: 'help' | 'keys' | 'confirm-danger' | 'confirm-new' }
+  | { kind: 'workflows'; loading: boolean; subagents: SubagentChoice[]; error?: string }
+  | { kind: 'help' | 'keys' | 'session-info' | 'confirm-danger' | 'confirm-new' }
 
 interface QuestionUi {
   requestId: number
@@ -36,27 +38,31 @@ interface QuestionUi {
 const EMPTY_STORE = new TranscriptStore()
 const READ_ONLY_RUNTIME: RuntimeSnapshot = Object.freeze({
   sessionId: undefined, cwd: process.cwd(), model: 'model —', agentStatus: 'idle', permission: undefined,
-  theme: 'deep-ocean', notice: undefined, error: undefined, approval: undefined, questions: undefined,
+  projection: undefined, theme: 'auto', notice: undefined, error: undefined, approval: undefined, questions: undefined,
 })
 const noopSubscribe = (): (() => void) => () => {}
 const readOnlySnapshot = (): RuntimeSnapshot => READ_ONLY_RUNTIME
+
+export function borderStyleForWidth(columns: number): 'classic' | 'single' {
+  return columns < 60 ? 'classic' : 'single'
+}
 
 function matchingCommands(items: readonly CommandChoice[], text: string): CommandChoice[] {
   const query = text.startsWith('/') ? text.slice(1).split(/\s/u, 1)[0]!.toLowerCase() : ''
   return items.filter(item => item.name.includes(query)).slice(0, 9)
 }
 
-function Panel({ overlay, editor, controller, theme }: { overlay: Overlay; editor: EditorState; controller: InteractionController | undefined; theme: Theme }): React.JSX.Element {
+function Panel({ overlay, editor, controller, runtime, store, theme, plain }: { overlay: Overlay; editor: EditorState; controller: InteractionController | undefined; runtime: RuntimeSnapshot; store: TranscriptStore; theme: Theme; plain: boolean }): React.JSX.Element {
   if (overlay.kind === 'commands') {
     const items = matchingCommands(controller?.commandChoices() ?? [], editor.text)
-    return <PanelFrame title="COMMAND SONAR" theme={theme}>{items.length === 0
+    return <PanelFrame title="COMMAND SONAR" theme={theme} plain={plain}>{items.length === 0
       ? <Text color={theme.warning}>No matching command</Text>
       : items.map((item, index) => <Text key={`${item.source}:${item.name}`} color={index === overlay.selected ? theme.primary : theme.text} bold={index === overlay.selected}>
           {index === overlay.selected ? '›' : ' '} /{item.name}<Text color={theme.muted}>  [{item.source}] {item.description}{item.inputHint === undefined ? '' : ` · ${item.inputHint}`}</Text>
         </Text>)}</PanelFrame>
   }
   if (overlay.kind === 'sessions') {
-    return <PanelFrame title="SESSION SOUNDINGS" theme={theme}>{overlay.loading
+    return <PanelFrame title="SESSION SOUNDINGS" theme={theme} plain={plain}>{overlay.loading
       ? <Text color={theme.accent}>◌ Reading persisted sessions…</Text>
       : overlay.items.length === 0 ? <Text color={theme.muted}>No persisted sessions yet</Text>
         : overlay.items.slice(0, 9).map((item, index) => <Text key={item.id} color={index === overlay.selected ? theme.primary : theme.text} bold={index === overlay.selected}>
@@ -65,41 +71,69 @@ function Panel({ overlay, editor, controller, theme }: { overlay: Overlay; edito
   }
   if (overlay.kind === 'permissions') {
     const names = controller?.permissionNames() ?? []
-    return <PanelFrame title={overlay.forApproval ? 'ALLOW ONCE + CHANGE PRESET' : 'PERMISSION PRESETS'} theme={theme}>
+    return <PanelFrame title={overlay.forApproval ? 'ALLOW ONCE + CHANGE PRESET' : 'PERMISSION PRESETS'} theme={theme} plain={plain}>
       {names.map((name, index) => <Text key={name} color={index === overlay.selected ? theme.primary : theme.text} bold={index === overlay.selected}>
         {index === overlay.selected ? '›' : ' '} {name}
       </Text>)}
     </PanelFrame>
   }
-  if (overlay.kind === 'confirm-danger') return <PanelFrame title="CONFIRM PERMISSION CHANGE" theme={theme}>
+  if (overlay.kind === 'confirm-danger') return <PanelFrame title="CONFIRM PERMISSION CHANGE" theme={theme} plain={plain}>
     <Text color={theme.warning}>danger-full-access changes both sandbox confinement and approval policy.</Text>
     <Text color={theme.text}>Press <Text bold color={theme.danger}>y</Text> to change it, or <Text bold>n / Esc</Text> to keep the current preset.</Text>
   </PanelFrame>
-  if (overlay.kind === 'confirm-new') return <PanelFrame title="CONFIRM NEW SESSION" theme={theme}>
+  if (overlay.kind === 'confirm-new') return <PanelFrame title="CONFIRM NEW SESSION" theme={theme} plain={plain}>
     <Text color={theme.warning}>The active turn will be stopped before a fresh root session is created.</Text>
     <Text color={theme.text}>Press <Text bold color={theme.primary}>y</Text> to continue, or <Text bold>n / Esc</Text> to stay here.</Text>
   </PanelFrame>
-  if (overlay.kind === 'keys') return <PanelFrame title="KEYS" theme={theme}>
-    <Text>Enter send · Ctrl+M multiline · Alt+Enter send · Ctrl+L steer</Text>
-    <Text>Ctrl+P commands · Ctrl+S sessions · Shift+Tab permission</Text>
-    <Text>Tab transcript/composer · PgUp/PgDn scroll · Ctrl+C cancel/clear/quit</Text>
+  if (overlay.kind === 'keys') return <PanelFrame title="KEY REFERENCE" theme={theme} plain={plain}>
+    <Text><Text bold>Send</Text>  Enter prompt · Ctrl+M multiline · Alt+Enter send · Ctrl+L steer</Text>
+    <Text><Text bold>Edit</Text>  Ctrl+W word · Ctrl+U to start · Ctrl+K to end · arrows/history</Text>
+    <Text><Text bold>Open</Text>  Ctrl+P/? commands · Ctrl+S sessions · Ctrl+X keys</Text>
+    <Text><Text bold>Move</Text>  Tab focus · PgUp/PgDn page · Ctrl+U/D half page · Esc back/park</Text>
+    <Text><Text bold>Policy</Text> Shift+Tab cycles only advertised dsh permission presets</Text>
+    <Text><Text bold>Blockers</Text> approval y/n/3 · questions arrows/digits/Space/z/Enter</Text>
+    <Text><Text bold>Stop</Text>  Ctrl+C cancel, clear draft, then confirm quit</Text>
   </PanelFrame>
-  return <PanelFrame title="HELP" theme={theme}>
+  if (overlay.kind === 'session-info') return <PanelFrame title="SESSION INFO" theme={theme} plain={plain}>
+    {sessionInfoLines(runtime).map(line => <Text key={line}>{line}</Text>)}
+  </PanelFrame>
+  if (overlay.kind === 'workflows') {
+    const workflows = store.getSnapshot().nodes.filter(node => node.kind === 'workflow')
+    const subagent = projectionValue(runtime, 'subagent')
+    const timing = projectionValue(runtime, 'subagentTiming')
+    return <PanelFrame title="WORKFLOWS / SUBAGENTS" theme={theme} plain={plain}>
+      {overlay.loading && <Text color={theme.accent}>◌ Reading durable descendants…</Text>}
+      {overlay.error !== undefined && <Text color={theme.warning}>{overlay.error}</Text>}
+      {!overlay.loading && workflows.length === 0 && overlay.subagents.length === 0 && subagent === undefined ? <Text color={theme.muted}>No durable workflow or subagent facts in this session.</Text> : workflows.slice(-5).map(node => <Box key={node.id} flexDirection="column">
+        <Text>◇ {node.name} · {node.status} · {node.children.length} jobs</Text>
+        {node.children.slice(0, 4).map(child => <Text key={`${child.seq}:${child.childId}`} color={theme.muted}>  └─ {child.label} · {child.phase ?? (child.outcome === undefined ? 'running' : 'done')}</Text>)}
+      </Box>)}
+      {overlay.subagents.slice(0, 12).map(item => <Text key={item.id} color={item.kind === 'diagnostic' ? theme.warning : theme.text}>
+        {'  '.repeat(Math.max(0, item.depth - 1))}└─ {item.label ?? item.id} · {item.kind === 'diagnostic' ? item.reason : `${item.mode} · ${item.activity}`}{item.hasChildren ? ' · children' : ''}
+      </Text>)}
+      {subagent !== undefined && <Text color={theme.muted}>subagent {safeInline(subagent)}{timing === undefined ? '' : ` · timing ${safeInline(timing)}`}</Text>}
+    </PanelFrame>
+  }
+  return <PanelFrame title="HELP" theme={theme} plain={plain}>
     <Text>Type a prompt and press Enter. Start with / to discover dsh and TUI commands.</Text>
     <Text color={theme.muted}>Blocking approvals use y/n; question cards use arrows, digits, Space, z, Enter.</Text>
   </PanelFrame>
 }
 
-function PanelFrame({ title, theme, children }: { title: string; theme: Theme; children: React.ReactNode }): React.JSX.Element {
-  return <Box borderStyle="single" borderColor={theme.accent} flexDirection="column" paddingX={1}>
+function safeInline(value: unknown): string {
+  try { return JSON.stringify(value) ?? String(value) } catch { return '[unserializable]' }
+}
+
+function PanelFrame({ title, theme, children, plain }: { title: string; theme: Theme; children: React.ReactNode; plain: boolean }): React.JSX.Element {
+  return <Box borderStyle={plain ? 'classic' : 'single'} borderColor={theme.accent} flexDirection="column" paddingX={1}>
     <Text bold color={theme.accent}>◇ {title}</Text>{children}
   </Box>
 }
 
-function ApprovalCard({ runtime, focused, theme }: { runtime: RuntimeSnapshot; focused: boolean; theme: Theme }): React.JSX.Element | null {
+function ApprovalCard({ runtime, focused, theme, plain }: { runtime: RuntimeSnapshot; focused: boolean; theme: Theme; plain: boolean }): React.JSX.Element | null {
   const request = runtime.approval
   if (request === undefined) return null
-  return <Box borderStyle="double" borderColor={focused ? theme.warning : theme.border} flexDirection="column" paddingX={1}>
+  return <Box borderStyle={plain ? 'classic' : 'double'} borderColor={focused ? theme.warning : theme.border} flexDirection="column" paddingX={1}>
     <Text bold color={theme.warning}>PERMISSION REQUIRED · {request.toolName}</Text>
     {request.reason !== undefined && <Text color={theme.text}>{request.reason}</Text>}
     {request.callId !== undefined && <Text color={theme.muted}>call {request.callId}</Text>}
@@ -108,13 +142,13 @@ function ApprovalCard({ runtime, focused, theme }: { runtime: RuntimeSnapshot; f
   </Box>
 }
 
-function QuestionCard({ runtime, ui, focused, theme }: { runtime: RuntimeSnapshot; ui: QuestionUi; focused: boolean; theme: Theme }): React.JSX.Element | null {
+function QuestionCard({ runtime, ui, focused, theme, plain }: { runtime: RuntimeSnapshot; ui: QuestionUi; focused: boolean; theme: Theme; plain: boolean }): React.JSX.Element | null {
   const request = runtime.questions
   if (request === undefined) return null
   const question = request.questions[ui.index]
   if (question === undefined) return null
   const selected = new Set(ui.selections[question.id] ?? [])
-  return <Box borderStyle="double" borderColor={focused ? theme.primary : theme.border} flexDirection="column" paddingX={1}>
+  return <Box borderStyle={plain ? 'classic' : 'double'} borderColor={focused ? theme.primary : theme.border} flexDirection="column" paddingX={1}>
     <Text bold color={theme.primary}>{question.header ?? 'QUESTION'} · {ui.index + 1}/{request.questions.length}</Text>
     <Text color={theme.text}>{question.question}</Text>
     {question.detail !== undefined && <Text color={theme.muted}>{question.detail}</Text>}
@@ -130,10 +164,10 @@ function QuestionCard({ runtime, ui, focused, theme }: { runtime: RuntimeSnapsho
   </Box>
 }
 
-function Composer({ editor, focused, runtime, theme }: { editor: EditorState; focused: boolean; runtime: RuntimeSnapshot; theme: Theme }): React.JSX.Element {
+function Composer({ editor, focused, runtime, theme, plain }: { editor: EditorState; focused: boolean; runtime: RuntimeSnapshot; theme: Theme; plain: boolean }): React.JSX.Element {
   const parts = cursorParts(editor)
   const mode = runtime.agentStatus === 'running' ? 'FOLLOW-UP' : 'PROMPT'
-  return <Box borderStyle="single" borderColor={focused ? theme.primary : theme.border} minHeight={editor.multiline ? 6 : 4} paddingX={1} flexDirection="column">
+  return <Box borderStyle={plain ? 'classic' : 'single'} borderColor={focused ? theme.primary : theme.border} minHeight={editor.multiline ? 6 : 4} paddingX={1} flexDirection="column">
     <Text><Text bold color={theme.primary}>⌁ {mode}</Text><Text color={theme.muted}> · {editor.multiline ? 'multiline · Alt+Enter sends' : 'Enter sends · Ctrl+M multiline'}</Text></Text>
     <Text color={theme.text}><Text color={theme.accent}>› </Text>{parts.before}<Text inverse={focused}>{parts.current}</Text>{parts.after}</Text>
   </Box>
@@ -144,7 +178,8 @@ export function Shell(props: ShellProps): React.JSX.Element {
   const { columns = 80, rows = 24 } = useWindowSize()
   const controller = props.controller
   const runtime = useSyncExternalStore(controller?.subscribe ?? noopSubscribe, controller?.getSnapshot ?? readOnlySnapshot, controller?.getSnapshot ?? readOnlySnapshot)
-  const theme = useMemo(() => resolveTheme(runtime.theme ?? props.theme, props.color), [runtime.theme, props.theme, props.color])
+  const themeName = controller === undefined ? props.theme : runtime.theme
+  const theme = useMemo(() => resolveTheme(themeName, props.color), [themeName, props.color])
   const store = controller?.transcript ?? props.store ?? EMPTY_STORE
   const state = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot)
   const [editor, setEditor] = useState<EditorState>(EMPTY_EDITOR)
@@ -157,11 +192,13 @@ export function Shell(props: ShellProps): React.JSX.Element {
   const [approvalOption, setApprovalOption] = useState(0)
   const [quitArmed, setQuitArmed] = useState(false)
   const [questionUi, setQuestionUi] = useState<QuestionUi>({ requestId: -1, index: 0, option: 0, selections: {}, customs: {}, customEditing: false })
-  const compact = columns < 72 || rows < 28
+  const compact = columns <= 80
+  const veryNarrow = borderStyleForWidth(columns) === 'classic'
+  const margin = veryNarrow ? 0 : compact ? 1 : 2
   const blockingRows = runtime.approval !== undefined || runtime.questions !== undefined ? 6 : 0
-  const overlayRows = overlay === undefined ? 0 : 7
+  const overlayRows = overlay === undefined ? 0 : overlay.kind === 'keys' ? 10 : overlay.kind === 'session-info' ? 9 : 7
   const composerRows = editor.multiline ? 6 : 4
-  const nodeBudget = Math.max(1, rows - (compact ? 7 : 13) - blockingRows - overlayRows - composerRows)
+  const nodeBudget = Math.max(1, rows - (compact ? 6 : 13) - blockingRows - overlayRows - composerRows)
 
   useEffect(() => {
     setBlockingFocused(true)
@@ -184,6 +221,16 @@ export function Shell(props: ShellProps): React.JSX.Element {
     })
   }
 
+  const openWorkflows = (): void => {
+    if (controller === undefined) return
+    setOverlay({ kind: 'workflows', loading: true, subagents: [] })
+    void controller.listSubagents().then(subagents => setOverlay(current => current?.kind === 'workflows' ? { kind: 'workflows', loading: false, subagents } : current)).catch(error => {
+      setOverlay(current => current?.kind === 'workflows'
+        ? { kind: 'workflows', loading: false, subagents: [], error: error instanceof Error ? error.message : String(error) }
+        : current)
+    })
+  }
+
   const runChoice = (choice: CommandChoice): void => {
     if (controller === undefined) return
     const line = editor.text.startsWith('/') ? editor.text : `/${choice.name}`
@@ -191,7 +238,8 @@ export function Shell(props: ShellProps): React.JSX.Element {
     setEditor(EMPTY_EDITOR)
     void controller.executeCommand(line, choice.source).then(action => {
       if (action === 'quit') exit()
-      else if (action === 'help' || action === 'keys' || action === 'confirm-danger' || action === 'confirm-new') setOverlay({ kind: action })
+      else if (action === 'workflows') openWorkflows()
+      else if (action === 'help' || action === 'keys' || action === 'session-info' || action === 'confirm-danger' || action === 'confirm-new') setOverlay({ kind: action })
       else if (action === 'sessions') openSessions()
     })
   }
@@ -371,34 +419,49 @@ export function Shell(props: ShellProps): React.JSX.Element {
     }
   })
 
+  const title = sessionTitle(runtime) ?? runtime.sessionId ?? props.sessionId ?? props.resume ?? 'new session'
+  const facts = statusSegments(runtime, !veryNarrow).join(' · ')
+  const signal = runtime.error ?? runtime.notice
+  const statusLine = middleEllipsis(signal === undefined ? facts : `${signal} │ ${facts}`, Math.max(1, columns - margin * 2))
+  const help = runtime.approval !== undefined
+    ? 'y allow · n reject · Esc park'
+    : runtime.questions !== undefined
+      ? 'arrows choose · Enter answer · Esc park'
+      : overlay !== undefined
+        ? '↑↓ choose · Enter open · Esc close'
+        : focus === 'transcript'
+          ? 'PgUp/PgDn scroll · Tab compose · Ctrl+X keys'
+          : 'Enter send · Ctrl+P commands · Ctrl+X keys'
+  const helpLine = middleEllipsis(quitArmed ? 'Ctrl+C again to quit' : compact ? help : `${help} · Ctrl+S sessions · Shift+Tab permissions`, Math.max(1, columns - margin * 2))
+
   return (
     <Box width={columns} height={rows} flexDirection="column" backgroundColor={theme.canvas}>
-      <Box paddingX={2} paddingTop={compact ? 0 : 1} alignItems="center" flexShrink={0}>
-        {!compact && state.nodes.length === 0 && <Logo theme={theme} monochrome={props.color === 'none'} />}
-        <Box marginLeft={!compact && state.nodes.length === 0 ? 3 : 0} flexDirection="column">
-          <Text bold color={theme.text}>DEEPSEEK / HARNESS</Text>
-          {!compact && <Text color={theme.accent}>TUI event console</Text>}
-          {!compact && <Text color={theme.muted}>M3 interaction · prompt / approval / resume</Text>}
+      <Box paddingX={margin} paddingTop={compact ? 0 : 1} alignItems="center" flexShrink={0}>
+        {!compact && rows >= 28 && state.nodes.length === 0 && <Logo theme={theme} monochrome={theme.monochrome} />}
+        <Box marginLeft={!compact && rows >= 28 && state.nodes.length === 0 ? 3 : 0} flexDirection="column">
+          <Text bold color={theme.text}>{compact ? `dsh-tui · ${middleEllipsis(title, Math.max(8, columns - margin * 2 - 10))}` : 'DEEPSEEK / HARNESS'}</Text>
+          {!compact && <Text color={theme.accent}>Abyss Workbench · {theme.name}</Text>}
+          {!compact && <Text color={theme.muted}>{middleEllipsis(`M4 complete · ${title}`, Math.max(8, columns - 40))}</Text>}
         </Box>
       </Box>
 
-      <Box marginX={2} marginTop={1} borderStyle="single" borderColor={focus === 'transcript' ? theme.primary : theme.border} flexDirection="column" flexGrow={1} paddingX={1} overflow="hidden">
+      <Box marginX={margin} marginTop={compact ? 0 : 1} borderStyle={veryNarrow ? 'classic' : 'single'} borderColor={focus === 'transcript' ? theme.primary : theme.border} flexDirection="column" flexGrow={1} paddingX={1} overflow="hidden">
         <Box><Text color={theme.primary}>◆ </Text><Text bold color={theme.text}>TRANSCRIPT</Text><Text color={theme.muted}>  seq {state.lastSeq < 0 ? '—' : state.lastSeq}{state.gap === undefined ? '' : ` · resnapshot ${state.gap.expected}→${state.gap.received}`}</Text></Box>
-        <Box marginTop={1} flexDirection="column" overflow="hidden">
-          <TranscriptView state={state} width={Math.max(10, columns - 8)} nodeBudget={nodeBudget} offset={Math.max(0, scrollOffset)} theme={theme} />
+        <Box marginTop={compact ? 0 : 1} flexDirection="column" overflow="hidden">
+          <TranscriptView state={state} width={Math.max(10, columns - margin * 2 - 4)} nodeBudget={nodeBudget} offset={Math.max(0, scrollOffset)} theme={theme} compact={compact} />
         </Box>
       </Box>
 
-      <Box marginX={2} flexDirection="column" flexShrink={0}>
-        <ApprovalCard runtime={runtime} focused={blockingFocused} theme={theme} />
-        <QuestionCard runtime={runtime} ui={questionUi} focused={blockingFocused} theme={theme} />
-        {overlay !== undefined && <Panel overlay={overlay} editor={editor} controller={controller} theme={theme} />}
-        <Composer editor={editor} focused={focus === 'composer' && blockingFocused} runtime={runtime} theme={theme} />
+      <Box marginX={margin} flexDirection="column" flexShrink={0}>
+        <ApprovalCard runtime={runtime} focused={blockingFocused} theme={theme} plain={veryNarrow} />
+        <QuestionCard runtime={runtime} ui={questionUi} focused={blockingFocused} theme={theme} plain={veryNarrow} />
+        {overlay !== undefined && <Panel overlay={overlay} editor={editor} controller={controller} runtime={runtime} store={store} theme={theme} plain={veryNarrow} />}
+        <Composer editor={editor} focused={focus === 'composer' && blockingFocused} runtime={runtime} theme={theme} plain={veryNarrow} />
       </Box>
 
-      <Box paddingX={2} justifyContent="space-between" flexShrink={0}>
-        <Text color={runtime.error === undefined ? theme.muted : theme.danger}>{runtime.error ?? runtime.notice ?? `${runtime.model} · ${runtime.agentStatus}`}</Text>
-        <Text color={quitArmed ? theme.warning : theme.accent}>{quitArmed ? 'Ctrl+C again to quit' : `${runtime.permission ?? 'permission —'} · ${runtime.sessionId ?? props.sessionId ?? props.resume ?? 'new'}`}</Text>
+      <Box paddingX={margin} flexDirection="column" flexShrink={0}>
+        <Text color={runtime.error === undefined ? theme.muted : theme.danger}>{statusLine}</Text>
+        <Text color={quitArmed ? theme.warning : theme.accent}>{helpLine}</Text>
       </Box>
     </Box>
   )
