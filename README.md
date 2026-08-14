@@ -2,6 +2,10 @@
 
 A full-screen terminal interface (TUI) for DeepSeek Harness (`dsh`), built as an independent, out-of-tree plugin. It runs in the same process as the `dsh` host, reads the durable session event stream directly, and uses host projections only for auxiliary status facts. The Chafa-generated DeepSeek whale is its one visual signature.
 
+<p align="center">
+  <img src="assets/screenshots/empty-session.png" alt="An empty dsh-tui session with the Chafa-generated DeepSeek whale" width="720">
+</p>
+
 ## Features
 
 - **Streaming transcript** — terminal-native Markdown, tool trees, diffs, workflow/job summaries, and raw-event fallback, with grapheme-safe CJK layout.
