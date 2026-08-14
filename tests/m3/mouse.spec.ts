@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseWheel } from '../../src/ui/mouse.js'
+import { parseMouseBurst, parseWheel } from '../../src/ui/mouse.js'
 import { redactSecrets } from '../../src/ui/secrets.js'
 
 describe('mouse wheel and secret chrome', () => {
@@ -10,6 +10,20 @@ describe('mouse wheel and secret chrome', () => {
     expect(parseWheel('\u001B[<64;1;1M')).toBe('up')
     expect(parseWheel('[<0;12;20M')).toBe('other')
     expect(parseWheel('hello')).toBeUndefined()
+  })
+
+  it('decodes SGR clicks, releases, and drag motion, ignoring wheel codes', () => {
+    expect(parseMouseBurst('[<0;7;27M')).toEqual([{ kind: 'press', button: 0, x: 7, y: 27 }])
+    expect(parseMouseBurst('\u001B[<2;9;21m')).toEqual([{ kind: 'release', button: 2, x: 9, y: 21 }])
+    expect(parseMouseBurst('[<32;10;27M')).toEqual([{ kind: 'motion', button: 0, x: 10, y: 27 }])
+    // Modifier bits ride along with motion; the button hides in the low two bits.
+    expect(parseMouseBurst('[<35;10;27M')).toEqual([{ kind: 'motion', button: 3, x: 10, y: 27 }])
+    expect(parseMouseBurst('[<0;1;1M[<64;2;2M[<32;3;3M')).toEqual([
+      { kind: 'press', button: 0, x: 1, y: 1 },
+      { kind: 'motion', button: 0, x: 3, y: 3 },
+    ])
+    expect(parseMouseBurst('')).toEqual([])
+    expect(parseMouseBurst('hello')).toEqual([])
   })
 
   it('redacts provider keys without touching ordinary status text', () => {

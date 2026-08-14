@@ -2,7 +2,8 @@ import React from 'react'
 import { Box, Text } from 'ink'
 import type { ToolNode, TranscriptState } from '../transcript-fold.js'
 import { presentReasoning } from './reasoning-view.js'
-import { messageKey, toolKey, toolOutputText, type RowColor, type TranscriptRow } from './transcript-rows.js'
+import { displayWidth, sliceCells } from './display-width.js'
+import { messageKey, toolKey, toolOutputText, type RowColor, type RowSegment, type TranscriptRow } from './transcript-rows.js'
 import type { Theme } from './theme.js'
 
 /** One keyboard-selectable block: a message's text, a reasoning trace, or a tool's output. */
@@ -61,13 +62,40 @@ function rowColor(color: RowColor | undefined, theme: Theme): Theme['text'] {
   return color === undefined ? theme.text : theme[color]
 }
 
-function Row({ row, theme }: { row: TranscriptRow; theme: Theme }): React.JSX.Element {
-  if (row.segments.length === 0) return <Text> </Text>
-  return <Text wrap="truncate">{row.segments.map((part, index) => (
+/** Split segments at cell offsets `[start, end)` and flag the overlap for inverse paint. */
+function sliceSegments(segments: readonly RowSegment[], start: number, end: number): Array<RowSegment & { inverse?: boolean }> {
+  const out: Array<RowSegment & { inverse?: boolean }> = []
+  let column = 0
+  for (const segment of segments) {
+    const width = displayWidth(segment.text)
+    const left = column
+    const right = column + width
+    column = right
+    if (right <= start || left >= end) {
+      out.push({ ...segment })
+      continue
+    }
+    const pre = sliceCells(segment.text, 0, Math.max(0, start - left))
+    const selected = sliceCells(segment.text, Math.max(0, start - left), Math.min(width, end - left))
+    const post = sliceCells(segment.text, Math.min(width, end - left), width)
+    if (pre !== '') out.push({ ...segment, text: pre })
+    if (selected !== '') out.push({ ...segment, text: selected, inverse: true })
+    if (post !== '') out.push({ ...segment, text: post })
+  }
+  return out
+}
+
+function Row({ row, theme, selection }: { row: TranscriptRow; theme: Theme; selection?: { start: number; end: number } | undefined }): React.JSX.Element {
+  const segments: Array<RowSegment & { inverse?: boolean | undefined }> = selection === undefined || selection.end <= selection.start
+    ? row.segments.map(part => ({ ...part }))
+    : sliceSegments(row.segments, selection.start, selection.end)
+  if (segments.length === 0) return <Text> </Text>
+  return <Text wrap="truncate">{segments.map((part, index) => (
     <Text key={index} color={rowColor(part.color, theme)}
       {...(part.bold === undefined ? {} : { bold: part.bold })}
       {...(part.italic === undefined ? {} : { italic: part.italic })}
-      {...(part.strike === undefined ? {} : { strikethrough: part.strike })}>{part.text}</Text>
+      {...(part.strike === undefined ? {} : { strikethrough: part.strike })}
+      {...(part.inverse === undefined ? {} : { inverse: part.inverse })}>{part.text}</Text>
   ))}</Text>
 }
 
@@ -96,12 +124,21 @@ export function scrollbarGlyphs(total: number, viewport: number, offset: number,
   return Array.from({ length: rows }, (_, index) => index >= start && index < start + size ? thumb : track)
 }
 
-export function TranscriptView({ rows, viewport, offset, theme, plain = false }: {
+/** Cell-range selection in absolute transcript-row coordinates. */
+export interface RowSelection {
+  readonly startRow: number
+  readonly start: number
+  readonly endRow: number
+  readonly end: number
+}
+
+export function TranscriptView({ rows, viewport, offset, theme, plain = false, selection }: {
   rows: readonly TranscriptRow[]
   viewport: number
   offset: number
   theme: Theme
   plain?: boolean
+  selection?: RowSelection | undefined
 }): React.JSX.Element {
   const window = viewportWindow(rows.length, viewport, offset)
   const visible = rows.slice(window.start, window.end)
@@ -111,7 +148,16 @@ export function TranscriptView({ rows, viewport, offset, theme, plain = false }:
       <Box flexDirection="column" flexGrow={1} flexShrink={1} overflow="hidden">
         {visible.length === 0
           ? <Text color={theme.muted}>Event plane ready · waiting for a prompt</Text>
-          : visible.map(row => <Row key={row.key} row={row} theme={theme} />)}
+          : visible.map((row, index) => {
+              const absolute = window.start + index
+              const rowSelection = selection === undefined || absolute < selection.startRow || absolute > selection.endRow
+                ? undefined
+                : {
+                    start: absolute === selection.startRow ? selection.start : 0,
+                    end: absolute === selection.endRow ? selection.end : Number.POSITIVE_INFINITY,
+                  }
+              return <Row key={row.key} row={row} theme={theme} selection={rowSelection} />
+            })}
       </Box>
       <Box flexDirection="column" flexShrink={0} marginLeft={1}>
         {bar.slice(0, Math.max(visible.length, 1)).map((glyph, index) => (

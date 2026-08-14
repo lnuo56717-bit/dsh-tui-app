@@ -19,10 +19,9 @@ export interface CaretPosition {
  * Where the hardware cursor must sit for the composer caret.
  *
  * An IME draws its pre-edit text at the terminal's own cursor, not at whatever
- * the app paints. Ink parks the cursor at the end of the frame, so composition
- * letters appeared at the bottom of the screen. The composer is measured from
- * the bottom edge because everything below it has a fixed height: two footer
- * rows, then the composer's own bottom border, then its editor rows.
+ * the app paints. The composer is measured from the bottom edge because
+ * everything below it has a fixed height: two footer rows, then the composer's
+ * own bottom border, then its editor rows.
  */
 export function composerCaret(input: {
   readonly rows: number
@@ -32,7 +31,13 @@ export function composerCaret(input: {
   const index = input.lines.findIndex(line => line.hasCursor)
   if (index < 0) return undefined
   const row = input.rows - 2 - input.lines.length + index
-  // border + horizontal padding + the two-cell composer prefix, then the typed cells.
-  const column = input.margin + 5 + displayWidth(input.lines[index]!.before)
+  // border + horizontal padding + the two-cell composer prefix, then the typed
+  // cells that render before the caret segment.
+  let cells = 0
+  for (const segment of input.lines[index]!.segments) {
+    if (segment.caret) break
+    cells += displayWidth(segment.text)
+  }
+  const column = input.margin + 5 + cells
   return row < 1 ? undefined : { row, column }
 }

@@ -30,6 +30,22 @@ export function cursorCell(text: string, graphemeOffset: number): number {
   return stringWidth(graphemes(text).slice(0, Math.max(0, graphemeOffset)).join(''))
 }
 
+/** Slice `text` to the display-cell range `[from, to)`, never splitting a grapheme. */
+export function sliceCells(text: string, from: number, to: number = Number.POSITIVE_INFINITY): string {
+  if (to <= from) return ''
+  if (from <= 0 && to === Number.POSITIVE_INFINITY) return text
+  let out = ''
+  let width = 0
+  for (const unit of graphemes(text)) {
+    const next = displayWidth(unit)
+    const start = width
+    width += next
+    if (width <= from || start >= to) continue
+    out += unit
+  }
+  return out
+}
+
 export function middleEllipsis(text: string, cells: number): string {
   if (cells <= 0) return ''
   if (displayWidth(text) <= cells) return text

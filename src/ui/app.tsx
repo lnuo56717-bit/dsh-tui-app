@@ -1,24 +1,24 @@
 import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { Box, Text, useApp, useInput, useStdout, useWindowSize } from 'ink'
+import { Box, Text, useApp, useCursor, useInput, useStdout, useWindowSize } from 'ink'
 import type { TuiStartupValues } from '../startup.js'
 import { copyNotice, copyToClipboard } from '../clipboard.js'
 import {
   type CommandChoice, type EffortChoice, InteractionController, type ModelChoice, type QuestionAnswerItem, type RuntimeSnapshot, type SessionChoice, type SessionSummary, type SubagentChoice,
 } from '../interaction-controller.js'
 import { TranscriptStore } from '../transcript-store.js'
-import { deleteForward, deleteToEnd, deleteToStart, deleteWord, EMPTY_EDITOR, backspace, insertText, moveCursor, moveCursorTo, presentEditor, type EditorLine, type EditorState } from './editor.js'
-import { displayWidth, graphemes, middleEllipsis, takeCells } from './display-width.js'
-import { parseWheelBurst } from './mouse.js'
+import { cursorForCell, deleteForward, deleteToEnd, deleteToStart, deleteWord, EMPTY_EDITOR, backspace, insertText, layoutEditor, moveCursor, moveCursorTo, type EditorLine, type EditorState } from './editor.js'
+import { displayWidth, graphemes, middleEllipsis, sliceCells, takeCells } from './display-width.js'
+import { parseMouseBurst, parseWheelBurst, type MouseReport } from './mouse.js'
 import { redactSecrets } from './secrets.js'
 import { Logo } from './logo.js'
 import { contextStatus, formatFooter, padCells, projectionValue, sessionInfoLines, sessionTitle } from './status.js'
 import { sessionDetail, sessionLabel, sessionMeta } from './session-picker.js'
 import { resolveTheme, type Theme } from './theme.js'
 import { presentReasoning } from './reasoning-view.js'
-import { transcriptRows } from './transcript-rows.js'
-import { composerCaret, CURSOR_HIDE, CURSOR_SHOW, moveCursorSequence } from './cursor.js'
+import { transcriptRows, type TranscriptRow } from './transcript-rows.js'
+import { composerCaret } from './cursor.js'
 import { terminalSequences } from './terminal.js'
-import { focusableBlocks, ReasoningDetailView, TranscriptView, viewportWindow, type TranscriptBlockRef } from './transcript-view.js'
+import { focusableBlocks, ReasoningDetailView, TranscriptView, viewportWindow, type RowSelection, type TranscriptBlockRef } from './transcript-view.js'
 
 export interface ShellProps extends TuiStartupValues {
   store?: TranscriptStore
@@ -59,6 +59,8 @@ const readOnlySnapshot = (): RuntimeSnapshot => READ_ONLY_RUNTIME
 const WHEEL_ROWS = 3
 /** Persisted sessions listed at once in the picker. */
 const SESSION_ROWS = 7
+/** Two Enters inside this window stop the running turn (the Grok double-Enter interject). */
+const DOUBLE_ENTER_MS = 900
 
 export function borderStyleForWidth(columns: number): 'classic' | 'single' {
   return columns < 60 ? 'classic' : 'single'
@@ -143,11 +145,12 @@ function Panel({ overlay, editor, controller, runtime, store, theme, plain, widt
     <Text><Text bold>Edit</Text>  Ctrl+W word · Ctrl+U to start · Ctrl+K to end · ↑ history</Text>
     <Text><Text bold>Open</Text>  Ctrl+P/? commands · Ctrl+S sessions · Ctrl+X keys</Text>
     <Text><Text bold>Blocks</Text> Tab then ↑↓ select · ←/→ fold tool output and thoughts · Enter full</Text>
-    <Text><Text bold>Copy</Text>  Ctrl+Y copies the selected block · Shift+drag for the terminal's own selection</Text>
+    <Text><Text bold>Copy</Text>  Ctrl+Y copies the selected block or mouse selection · release after a transcript drag also copies</Text>
     <Text><Text bold>Move</Text>  Tab focus · PgUp/PgDn page · Ctrl+U/D half page · wheel scrolls · Esc back/park</Text>
+    <Text><Text bold>Mouse</Text>  click the composer to move the caret · drag selects · click the transcript to focus a block</Text>
     <Text><Text bold>Policy</Text> Shift+Tab cycles only advertised dsh permission presets</Text>
     <Text><Text bold>Blockers</Text> approval y/n/3 · questions arrows/digits/Space/z/Enter</Text>
-    <Text><Text bold>Stop</Text>  Ctrl+C cancel, clear draft, then confirm quit</Text>
+    <Text><Text bold>Stop</Text>  Esc or Enter×2 stop the running turn · Ctrl+C cancel, clear draft, then confirm quit</Text>
   </PanelFrame>
   if (overlay.kind === 'session-info') return <PanelFrame title="SESSION INFO" theme={theme} plain={plain}>
     {sessionInfoLines(runtime).map(line => <Text key={line}>{line}</Text>)}
@@ -179,6 +182,19 @@ function safeInline(value: unknown): string {
   return redactSecrets((() => {
     try { return JSON.stringify(value) ?? String(value) } catch { return '[unserializable]' }
   })())
+}
+
+/** The plain text covered by a cell-range selection across transcript rows. */
+function transcriptSelectionText(rows: readonly TranscriptRow[], selection: RowSelection): string {
+  const parts: string[] = []
+  for (let row = selection.startRow; row <= selection.endRow; row += 1) {
+    const text = rows[row]?.segments.map(part => part.text).join('') ?? ''
+    if (row === selection.startRow && row === selection.endRow) parts.push(sliceCells(text, selection.start, selection.end))
+    else if (row === selection.startRow) parts.push(sliceCells(text, selection.start))
+    else if (row === selection.endRow) parts.push(sliceCells(text, 0, selection.end))
+    else parts.push(text)
+  }
+  return parts.join('\n')
 }
 
 function PanelFrame({ title, theme, children, plain }: { title: string; theme: Theme; children: React.ReactNode; plain: boolean }): React.JSX.Element {
@@ -240,7 +256,7 @@ function Composer({ editor, focused, runtime, theme, plain, lines, hardwareCaret
     </Box>
     {lines.map((line, index) => <Text key={index} color={theme.text} wrap="truncate">
       <Text color={theme.accent}>{index === 0 ? '› ' : '  '}</Text>
-      {line.before}{line.hasCursor ? <Text inverse={focused && !hardwareCaret}>{line.current}</Text> : null}{line.after}
+      {line.segments.map((segment, part) => <Text key={part} inverse={segment.caret ? focused && !hardwareCaret : segment.selected}>{segment.text}</Text>)}
     </Text>)}
   </Box>
 }
@@ -248,6 +264,10 @@ function Composer({ editor, focused, runtime, theme, plain, lines, hardwareCaret
 export function Shell(props: ShellProps): React.JSX.Element {
   const { exit } = useApp()
   const { stdout } = useStdout()
+  // Ink paints the cursor suffix with the frame itself, so a delayed throttled
+  // frame can never leave the terminal cursor at the end of the screen; the IME
+  // composes at the caret even while tokens keep streaming past it.
+  const { setCursorPosition } = useCursor()
   const { columns = 80, rows = 24 } = useWindowSize()
   const controller = props.controller
   const runtime = useSyncExternalStore(controller?.subscribe ?? noopSubscribe, controller?.getSnapshot ?? readOnlySnapshot, controller?.getSnapshot ?? readOnlySnapshot)
@@ -272,6 +292,11 @@ export function Shell(props: ShellProps): React.JSX.Element {
   const [blockingFocused, setBlockingFocused] = useState(true)
   const [approvalOption, setApprovalOption] = useState(0)
   const [quitArmed, setQuitArmed] = useState(false)
+  const [stopArmed, setStopArmed] = useState(false)
+  const enterAt = useRef(0)
+  const stopTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const mouseDrag = useRef<{ area: 'composer'; anchor: number } | { area: 'transcript'; anchorRow: number; anchorCol: number } | undefined>(undefined)
+  const [transcriptSel, setTranscriptSel] = useState<RowSelection | undefined>()
   const [questionUi, setQuestionUi] = useState<QuestionUi>({ requestId: -1, index: 0, option: 0, selections: {}, customs: {}, customEditing: false })
   const compact = columns <= 80
   const veryNarrow = borderStyleForWidth(columns) === 'classic'
@@ -301,9 +326,18 @@ export function Shell(props: ShellProps): React.JSX.Element {
   const maxScroll = Math.max(0, transcript.length - viewportRows)
   const scroll = Math.min(Math.max(0, scrollOffset), maxScroll)
   const composerWidth = Math.max(10, columns - margin * 2 - 4)
-  const editorLines = presentEditor(editor, Math.max(8, composerWidth), editor.multiline ? 5 : 3)
+  const editorLayout = layoutEditor(editor, Math.max(8, composerWidth), editor.multiline ? 5 : 3)
+  const editorLines = editorLayout.lines
   const composerFocused = focus === 'composer' && blockingFocused && overlay === undefined
   const caret = composerFocused ? composerCaret({ rows, margin, lines: editorLines }) : undefined
+  setCursorPosition(caret === undefined ? undefined : { x: caret.column - 1, y: caret.row - 1 })
+  // Bottom-anchored geometry for mouse hit-testing: the composer's own height is
+  // exact, so its rows and the transcript viewport above it can be found by
+  // counting from the bottom of the screen.
+  const composerHeight = Math.max(editor.multiline ? 6 : 4, editorLines.length + 3)
+  const middleHeight = blockingRows + overlayRows + composerHeight
+  const transcriptBottom = rows - 2 - middleHeight
+  const transcriptWindow = viewportWindow(transcript.length, viewportRows, scroll)
 
   useEffect(() => {
     setBlockingFocused(true)
@@ -321,6 +355,7 @@ export function Shell(props: ShellProps): React.JSX.Element {
     setFocusedBlockKey(undefined)
     setReasoningDetail(undefined)
     setScrollOffset(0)
+    setTranscriptSel(undefined)
   }, [runtime.sessionId])
 
   // Streaming appends rows below the viewport. Growing the offset by the same
@@ -332,20 +367,15 @@ export function Shell(props: ShellProps): React.JSX.Element {
     if (grew > 0) setScrollOffset(value => value > 0 ? value + grew : 0)
   }, [transcript.length])
 
-  useEffect(() => () => { clearTimeout(wheelBurst.current.historyTimer) }, [])
+  useEffect(() => () => { clearTimeout(wheelBurst.current.historyTimer); clearTimeout(stopTimer.current) }, [])
 
-  // An IME paints its pre-edit letters at the terminal's own cursor. Ink leaves
-  // that cursor parked at the end of the frame, which is why composition text
-  // appeared at the bottom of the screen. Park it on the composer caret instead,
-  // after the frame write: setImmediate lands once Ink's synchronous paint is done.
+  // The double-Enter arm is only meaningful while a turn is running.
   useEffect(() => {
-    const stream = props.stdout ?? stdout
-    if (stream === undefined || stream.isTTY !== true) return
-    const handle = setImmediate(() => {
-      stream.write(caret === undefined ? CURSOR_HIDE : `${moveCursorSequence(caret.row, caret.column)}${CURSOR_SHOW}`)
-    })
-    return () => { clearImmediate(handle) }
-  })
+    if (runtime.agentStatus !== 'running') {
+      setStopArmed(false)
+      enterAt.current = 0
+    }
+  }, [runtime.agentStatus])
 
   useEffect(() => {
     if (controller === undefined || overlay?.kind !== 'sessions' || overlay.loading) return
@@ -489,6 +519,66 @@ export function Shell(props: ShellProps): React.JSX.Element {
       : 'Mouse tracking off · drag selects text · keys still scroll · /mouse restores the wheel')
   }
 
+  /**
+   * Left-button mouse support over the two content panes. In the composer a
+   * click moves the caret and a drag extends a selection (typing replaces it);
+   * in the transcript a click focuses the block under the cursor and a drag
+   * selects rows — releasing copies the selection to the clipboard.
+   */
+  const handleMouse = (report: MouseReport): void => {
+    if (report.kind === 'release') {
+      const drag = mouseDrag.current
+      mouseDrag.current = undefined
+      if (drag?.area === 'transcript' && transcriptSel !== undefined && (transcriptSel.endRow > transcriptSel.startRow || transcriptSel.end > transcriptSel.start)) {
+        const text = transcriptSelectionText(transcript, transcriptSel)
+        void copyToClipboard(text, props.stdout === undefined ? {} : { stdout: props.stdout })
+          .then(() => controller?.notify(`Copied ${text.split('\n').length} line${text.split('\n').length === 1 ? '' : 's'} to the clipboard`))
+          .catch(() => controller?.notify('Clipboard copy failed'))
+      }
+      setTranscriptSel(undefined)
+      return
+    }
+    if (report.button !== 0 || controller === undefined || overlay !== undefined || blockingRows !== 0) return
+    // Composer rows sit at the bottom: footer(2) + composer borders/header, then the editor lines.
+    const editorTop = rows - 2 - editorLines.length
+    if (report.y >= editorTop && report.y <= rows - 3) {
+      const target = cursorForCell(editorLayout, report.y - editorTop, report.x - margin - 5)
+      if (target === undefined) return
+      if (report.kind === 'press') {
+        mouseDrag.current = { area: 'composer', anchor: target }
+        setEditor(value => ({ ...value, cursor: target, selection: undefined }))
+        if (focus !== 'composer') { setFocus('composer'); setReasoningDetail(undefined) }
+      } else if (report.kind === 'motion' && mouseDrag.current?.area === 'composer') {
+        const anchor = mouseDrag.current.anchor
+        setEditor(value => ({ ...value, cursor: target, selection: anchor === target ? undefined : { start: Math.min(anchor, target), end: Math.max(anchor, target) } }))
+      }
+      return
+    }
+    if (detailItem !== undefined) return
+    // The viewport block is bottom-justified, so a short transcript hugs the
+    // bottom edge; hit-test from the visible row count, not the full viewport.
+    const visibleCount = Math.min(viewportRows, transcript.length)
+    const viewportRow = report.y - (transcriptBottom - visibleCount)
+    if (viewportRow < 0 || viewportRow >= visibleCount) return
+    const row = transcriptWindow.start + viewportRow
+    if (row < 0 || row >= transcript.length) return
+    const column = Math.max(0, report.x - margin - 3)
+    if (report.kind === 'press') {
+      mouseDrag.current = { area: 'transcript', anchorRow: row, anchorCol: column }
+      setTranscriptSel(undefined)
+      const block = blocks.find(item => item.nodeId === transcript[row]?.nodeId)
+      focusBlock(block)
+      if (focus !== 'transcript') setFocus('transcript')
+    } else if (report.kind === 'motion' && mouseDrag.current?.area === 'transcript') {
+      const { anchorRow, anchorCol } = mouseDrag.current
+      setTranscriptSel(row < anchorRow
+        ? { startRow: row, start: column, endRow: anchorRow, end: anchorCol }
+        : row > anchorRow
+          ? { startRow: anchorRow, start: anchorCol, endRow: row, end: column }
+          : { startRow: row, start: Math.min(column, anchorCol), endRow: row, end: Math.max(column, anchorCol) })
+    }
+  }
+
   const runChoice = (choice: CommandChoice): void => {
     if (controller === undefined) return
     const suffix = editor.text.startsWith('/') ? /^\/[^\s]*([\s\S]*)$/u.exec(editor.text)?.[1] ?? '' : ''
@@ -508,6 +598,8 @@ export function Shell(props: ShellProps): React.JSX.Element {
 
   const submitPrompt = (steer = false): void => {
     if (editor.text.trim() === '') return
+    setStopArmed(false)
+    enterAt.current = 0
     if (editor.text.startsWith('/')) {
       const items = matchingCommands(controller?.commandChoices() ?? [], editor.text)
       if (items.length > 0) runChoice(items[Math.min(overlay?.kind === 'commands' ? overlay.selected : 0, items.length - 1)]!)
@@ -646,7 +738,15 @@ export function Shell(props: ShellProps): React.JSX.Element {
       handleVerticalNav(wheel.notches < 0 ? 'up' : 'down', true, Math.abs(wheel.notches) * WHEEL_ROWS)
       return
     }
+    // Clicks and drags arrive as mouse reports too; handle them before the
+    // leftover-noise swallow below drops every non-wheel report.
+    const mouse = parseMouseBurst(input)
+    if (mouse.length > 0) {
+      for (const report of mouse) handleMouse(report)
+      return
+    }
     if (wheel.mouse) return
+    if (stopArmed && !key.return) { setStopArmed(false); enterAt.current = 0 }
     if (quitArmed && !(key.ctrl && input === 'c')) setQuitArmed(false)
 
     if (runtime.approval !== undefined && blockingFocused && overlay === undefined) {
@@ -693,6 +793,9 @@ export function Shell(props: ShellProps): React.JSX.Element {
       }
       return
     }
+
+    // Grok's simple-mode policy: a running turn swallows Esc and stops.
+    if (key.escape && runtime.agentStatus === 'running') { controller?.cancel(); return }
 
     if (overlay !== undefined) {
       if (overlay.kind === 'commands') {
@@ -748,7 +851,17 @@ export function Shell(props: ShellProps): React.JSX.Element {
       return
     }
 
-    if (key.ctrl && input === 'y') { copyBlock(focusedBlock); return }
+    if (key.ctrl && input === 'y') {
+      if (focus === 'composer' && editor.selection !== undefined && editor.selection.end > editor.selection.start) {
+        const text = graphemes(editor.text).slice(editor.selection.start, editor.selection.end).join('')
+        void copyToClipboard(text, props.stdout === undefined ? {} : { stdout: props.stdout })
+          .then(result => controller?.notify(copyNotice(text, result)))
+          .catch(() => controller?.notify('Clipboard copy failed'))
+        return
+      }
+      copyBlock(focusedBlock)
+      return
+    }
     if (key.ctrl && input === 'e') {
       if (compact && thoughts.length > 0 && focusedBlock?.kind !== 'tool') {
         if (reasoningDetail !== undefined) { setReasoningDetail(undefined); return }
@@ -824,6 +937,10 @@ export function Shell(props: ShellProps): React.JSX.Element {
     if (key.ctrl && input === 'w') { setEditor(value => deleteWord(value)); return }
     if (key.ctrl && input === 'u') { setEditor(value => deleteToStart(value)); return }
     if (key.ctrl && input === 'k') { setEditor(value => deleteToEnd(value)); return }
+    if (key.escape) {
+      if (editor.selection !== undefined) setEditor(value => ({ ...value, selection: undefined }))
+      return
+    }
     // Paging the transcript never requires leaving the composer, exactly like the wheel.
     if (key.pageUp) { scrollTranscript('up', Math.max(1, viewportRows - 1)); return }
     if (key.pageDown) { scrollTranscript('down', Math.max(1, viewportRows - 1)); return }
@@ -836,6 +953,23 @@ export function Shell(props: ShellProps): React.JSX.Element {
     else if ((key.upArrow || key.downArrow) && key.ctrl) recallHistory(key.upArrow ? 'up' : 'down')
     else if (key.upArrow || key.downArrow) handleVerticalNav(key.upArrow ? 'up' : 'down', false)
     else if (key.return) {
+      if (runtime.agentStatus === 'running' && editor.text.trim() === '') {
+        // Double Enter interrupts the running turn (the Grok interject gesture).
+        const now = Date.now()
+        if (enterAt.current !== 0 && now - enterAt.current <= DOUBLE_ENTER_MS) {
+          enterAt.current = 0
+          setStopArmed(false)
+          clearTimeout(stopTimer.current)
+          controller?.cancel()
+        } else {
+          enterAt.current = now
+          setStopArmed(true)
+          clearTimeout(stopTimer.current)
+          stopTimer.current = setTimeout(() => setStopArmed(false), DOUBLE_ENTER_MS + 250)
+          controller?.notify('Enter again to stop the turn · Esc also stops')
+        }
+        return
+      }
       if (editor.multiline && !key.meta) setEditor(value => insertText(value, '\n'))
       else submitPrompt(false)
     } else if (!key.ctrl && !key.meta && input !== '') {
@@ -865,7 +999,9 @@ export function Shell(props: ShellProps): React.JSX.Element {
           ? 'PgUp/PgDn thought · Enter/Esc close · Ctrl+E all'
           : focus === 'transcript'
             ? '↑↓ block · ←→ fold · Ctrl+Y copy · End latest'
-            : 'Enter send · Ctrl+P commands · Ctrl+Y copy last block'
+            : runtime.agentStatus === 'running'
+              ? stopArmed ? 'Enter again to stop · Esc stops now' : 'Esc stop · Enter×2 stop · typing queues follow-up'
+              : 'Enter send · Ctrl+P commands · Ctrl+Y copy last block'
   const helpLine = middleEllipsis(quitArmed ? 'Ctrl+C again to quit' : compact ? help : `${help} · Ctrl+S sessions · Shift+Tab permissions`, Math.max(1, columns - margin * 2))
 
   return (
@@ -883,7 +1019,7 @@ export function Shell(props: ShellProps): React.JSX.Element {
         <Box><Text color={theme.primary}>{detailItem === undefined ? '◆ ' : '◇ '}</Text><Text bold color={theme.text}>{transcriptHeading}</Text><Text color={theme.muted}>{transcriptFacts}</Text></Box>
         <Box marginTop={compact ? 0 : 1} flexDirection="column" flexGrow={1} justifyContent="flex-end" overflow="hidden">
           {detailItem === undefined
-            ? <TranscriptView rows={transcript} viewport={viewportRows} offset={scroll} theme={theme} plain={veryNarrow} />
+            ? <TranscriptView rows={transcript} viewport={viewportRows} offset={scroll} theme={theme} plain={veryNarrow} selection={transcriptSel} />
             : <ReasoningDetailView item={detailItem} width={transcriptWidth} rows={viewportRows} offset={reasoningDetail?.offset ?? 0} theme={theme} />}
         </Box>
       </Box>
