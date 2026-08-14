@@ -20,6 +20,7 @@ A full-screen terminal interface (TUI) for DeepSeek Harness (`dsh`), built as an
 - **Reasoning disclosure** — Grok-style views over real dsh reasoning events: live tail, stable settled summary, bounded preview, and an independently scrollable detail view.
 - **Native structured questions** — the app registers the host's `userQuestions` provider, so a profile that loads `@deepseek-ai/dsh-tool-ask-user` gives the model a working `ask_user_question`: the tool blocks, the QuestionCard collects a keyboard answer, and the answer returns as an ordinary tool result. Only the active root agent may ask; a subagent's request is refused rather than answered on the user's behalf. See [Enabling ask_user_question](#enabling-ask_user_question).
 - **Session picker** — `/resume` (and `Ctrl+S`) lists persisted conversations by their durable title (or opening prompt), prompt count, and age, with a current-session marker.
+- **Task and conversation timing** — while a turn runs, the header chip counts its elapsed seconds on its own clock; when the turn closes, the chip states that turn's span and the conversation's accumulated task time. Both come from the log's own `turn/start`/`turn/end` timestamps, so a resumed session restates a real total, and a turn Harness never timestamped is not counted rather than estimated.
 - **Safe status chrome** — projection-backed footer keeps only short fields (notice, ctx, short model, effort, permission, plan/todos); session ids and cwd live in `/session-info`; secret-like strings are always redacted; secrets and billing are never shown.
 - **Themes** — Abyss and Pearl with truecolor, 256-color, 16-color, and monochrome palettes. `auto` safely defaults to Abyss when the terminal background cannot be determined without a blocking query.
 
@@ -154,6 +155,8 @@ npm run test:ac:all
 
 The full local acceptance requires the existing `dsh` launcher for AC-1 through AC-5. CI runs the static M4 suite on `windows-latest`; real-profile PTY acceptance remains a local/release gate because CI does not install another Harness copy.
 
+`npm run test:timer` is a local-only end-to-end check of the elapsed-time chip: a read-only `--patch` overlay adds a driver that opens and closes two real turns on the real session clock, and the probe asserts the footer counted up once a second while a turn was open and then stated the conversation total that matches the logged spans. Like the check below, it edits nothing under `$DSH_HOME` and deletes the session its own probe created.
+
 `npm run test:ask-user` is a local-only end-to-end check of the native question path: it boots the machine's own `tui` profile with a read-only `--patch` overlay, asserts `ask_user_question` is in the model-facing registry, answers the QuestionCard with real keystrokes, and asserts the tool stayed blocked until it did. It edits nothing under `$DSH_HOME` and deletes the session its own probe created.
 
 ## Known limitations
@@ -164,6 +167,7 @@ The full local acceptance requires the existing `dsh` launcher for AC-1 through 
 - Assistant messages are still rendered in full; only tool output folds. A model that emits a very long code block in its own answer still prints it.
 - Placing the terminal cursor on the composer caret is what lets an IME compose in place. A terminal that ignores cursor positioning keeps the old behavior.
 - The session picker folds one durable log per visible row, so a very large stored session costs one read when it scrolls into view. Rows stay sorted by creation time, not by folded last activity, because sorting by activity would require reading every log.
+- The elapsed chip times turns, not wall-clock conversation length: the seconds you spend typing between turns are not in the total, and the last-turn/total pair is dropped for the headline number when the header is too narrow to hold both. A turn left open by a failed agent parks the chip on its settled facts instead of counting up forever.
 - `@` remains ordinary prompt text because rc.6 has no host-safe general attachment-picker seam.
 - Images render as attachment labels, not terminal pixels. The whale is a pre-generated ASCII asset.
 - No transcript-content search, multi-root dashboard, remote attach, ACP bridge, persistent per-command grants, or invented `/auto` policy.

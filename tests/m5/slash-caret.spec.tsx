@@ -33,8 +33,9 @@ function harness(columns: number, rows: number) {
     notify: () => {},
     // Long real-world command names and descriptions: before the fix they
     // wrapped inside the panel and pushed the frame past the terminal height.
+    // Every name matches the 'k' query below, so the panel really is full.
     commandChoices: () => Array.from({ length: 9 }, (_, i) => ({
-      name: `command-with-a-very-long-name-${i}`, source: 'dsh' as const,
+      name: `ka-command-with-a-very-long-name-${i}`, source: 'dsh' as const,
       description: `a description long enough to wrap across the panel at this width ${i} ${'x'.repeat(80)}`,
       inputHint: 'some extra hint text that also takes cells',
     })),
@@ -64,7 +65,7 @@ async function until<T>(read: () => T | undefined, label: string, timeout = 2_00
 }
 
 describe('slash commands keep the caret on the composer', () => {
-  for (const [columns, rows] of [[80, 24], [80, 20], [100, 30]] as const) {
+  for (const [columns, rows] of [[80, 24], [80, 20], [100, 30], [120, 28], [120, 32]] as const) {
     it(`never overflows the frame at ${columns}x${rows} and parks the caret on the draft`, async () => {
       const app = harness(columns, rows)
       try {
@@ -78,8 +79,16 @@ describe('slash commands keep the caret on the composer', () => {
         // list to the height budget instead of pushing the composer off-screen.
         expect(lines.length).toBeLessThanOrEqual(rows)
         expect(lines.some(line => line.includes('COMMAND SONAR'))).toBe(true)
-        // The draft still renders in the composer, bottom-anchored.
-        const editorIdx = lines.findIndex(line => line.includes('› /k'))
+        // The idle wide header shows the whale, whose seven extra rows the
+        // budgets must count or the frame overflows and drags the caret with it.
+        if (columns > 80) expect(lines.some(line => line.includes('yyggg'))).toBe(true)
+        // The footer stays on screen: an overflowing frame would clip it and
+        // shift the composer's measured row.
+        expect(lines.some(line => line.includes('↑↓ choose'))).toBe(true)
+        // The draft still renders in the composer, bottom-anchored. The draft
+        // line is the only one where '/k' is followed by padding and the border,
+        // not by the rest of a command name (the selected row also starts '› /k').
+        const editorIdx = lines.findIndex(line => /› \/k\s*│$/u.test(line))
         expect(editorIdx).toBe(rows - 4)
         // The suffix lands exactly on the editor line: rows-3 from the frame
         // bottom, so the up-move is 3 regardless of panel height.

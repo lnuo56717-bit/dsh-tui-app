@@ -16,6 +16,7 @@ import { sessionDetail, sessionLabel, sessionMeta } from './session-picker.js'
 import { resolveTheme, type Theme } from './theme.js'
 import { presentReasoning } from './reasoning-view.js'
 import { transcriptRows, type TranscriptRow } from './transcript-rows.js'
+import { elapsedLabel, settledTiming } from './timing.js'
 import { composerCaret } from './cursor.js'
 import { terminalSequences } from './terminal.js'
 import { focusableBlocks, ReasoningDetailView, TranscriptView, viewportWindow, type RowSelection, type TranscriptBlockRef } from './transcript-view.js'
@@ -61,6 +62,8 @@ const WHEEL_ROWS = 3
 const SESSION_ROWS = 7
 /** Two Enters inside this window stop the running turn (the Grok double-Enter interject). */
 const DOUBLE_ENTER_MS = 900
+/** Repaint cadence of the running task's elapsed seconds; the chip reads in whole seconds. */
+const TIMER_TICK_MS = 1_000
 
 export function borderStyleForWidth(columns: number): 'classic' | 'single' {
   return columns < 60 ? 'classic' : 'single'
@@ -87,7 +90,9 @@ function Panel({ overlay, editor, controller, runtime, store, theme, plain, widt
         </Text>)}</PanelFrame>
   }
   if (overlay.kind === 'sessions') {
-    const limit = Math.max(1, Math.min(SESSION_ROWS, maxItems))
+    // The detail row under the list costs one of the budget's rows, so the list
+    // itself keeps one fewer than the shared item cap.
+    const limit = Math.max(1, Math.min(SESSION_ROWS, maxItems - 1))
     const detail = sessionDetail(overlay.items[overlay.selected])
     return <PanelFrame title="SESSION SOUNDINGS" theme={theme} plain={plain}>{overlay.loading
       ? <Text color={theme.accent}>◌ Reading persisted sessions…</Text>
@@ -289,6 +294,8 @@ export function Shell(props: ShellProps): React.JSX.Element {
   const [reasoningDetail, setReasoningDetail] = useState<{ key: string; offset: number; follow: boolean } | undefined>()
   const [summaries, setSummaries] = useState<Record<string, SessionSummary>>({})
   const [mouseTracking, setMouseTracking] = useState(true)
+  /** Ticks only while a turn is open, so an idle TUI repaints on events alone. */
+  const [clock, setClock] = useState(() => Date.now())
   const catalogRequest = useRef(0)
   const rowTotal = useRef(0)
   const wheelBurst = useRef({ at: 0, count: 0, historyTimer: undefined as ReturnType<typeof setTimeout> | undefined })
@@ -308,13 +315,20 @@ export function Shell(props: ShellProps): React.JSX.Element {
   const compact = columns <= 80
   const veryNarrow = borderStyleForWidth(columns) === 'classic'
   const margin = veryNarrow ? 0 : compact ? 1 : 2
+  // The idle wide header shows the whale instead of the three-line title block:
+  // ten logo rows plus the header's own padding row, seven more than the title.
+  // Every height budget below must count those rows or the frame outgrows the
+  // terminal — the overflow scrolls the screen and shifts the caret suffix off
+  // the composer, so IME pre-edit text floats above the draft instead of on it.
+  const showWhale = !compact && rows >= 28 && state.nodes.length === 0
+  const whaleExtra = showWhale ? 7 : 0
   const blockingRows = runtime.approval !== undefined || runtime.questions !== undefined ? 6 : 0
   const overlayRows = overlay === undefined ? 0
     : overlay.kind === 'keys' ? 12
       : overlay.kind === 'sessions' ? SESSION_ROWS + 4
         : overlay.kind === 'session-info' ? 9 : overlay.kind === 'models' ? 10 : overlay.kind === 'efforts' ? 8 : 7
   const composerRows = editor.multiline ? 6 : 4
-  const viewportRows = Math.max(1, rows - (compact ? 6 : 13) - blockingRows - overlayRows - composerRows)
+  const viewportRows = Math.max(1, rows - (compact ? 6 : 13 + whaleExtra) - blockingRows - overlayRows - composerRows)
   const transcriptWidth = Math.max(10, columns - margin * 2 - 4)
   // The scrollbar column is always reserved, so crossing the viewport height
   // never rewraps the transcript underneath the reader.
@@ -353,12 +367,17 @@ export function Shell(props: ShellProps): React.JSX.Element {
   const transcriptBottom = rows - 2 - middleHeight
   const transcriptWindow = viewportWindow(transcript.length, viewportRows, scroll)
   // Rows the open overlay panel may occupy without pushing the frame past the
-  // terminal height: everything else is fixed, the transcript keeps its chrome,
-  // and the panel clips its list to the budget instead of overflowing. A frame
-  // taller than the screen scrolls the terminal and shifts the cursor suffix —
-  // the IME composition lands above the caret.
-  const panelBudget = Math.max(6, rows - (compact ? 6 : 10) - blockingRows - composerHeight)
+  // terminal height: header (including the whale's extra rows), transcript
+  // chrome, composer and footer are fixed, one row always stays for the
+  // transcript, and the panel clips its list to the budget instead of
+  // overflowing. A frame taller than the screen scrolls the terminal and shifts
+  // the cursor suffix — the IME composition lands above the caret.
+  const panelBudget = Math.max(1, rows - (compact ? 7 : 12 + whaleExtra) - blockingRows - composerHeight)
   const panelMaxItems = Math.max(1, panelBudget - 3)
+  // The log's open turn is the task being timed. Requiring a running agent too
+  // means a turn left open by a failure parks the chip on its settled facts
+  // instead of counting up forever.
+  const turnRunning = state.timing.open !== undefined && runtime.agentStatus === 'running'
 
   useEffect(() => {
     setBlockingFocused(true)
@@ -387,6 +406,16 @@ export function Shell(props: ShellProps): React.JSX.Element {
     rowTotal.current = transcript.length
     if (grew > 0) setScrollOffset(value => value > 0 ? value + grew : 0)
   }, [transcript.length])
+
+  // The elapsed chip advances on its own clock while the task runs; when the
+  // turn closes the interval stops and the chip reads the logged spans, which
+  // no longer move.
+  useEffect(() => {
+    if (!turnRunning) return
+    setClock(Date.now())
+    const timer = setInterval(() => setClock(Date.now()), TIMER_TICK_MS)
+    return () => { clearInterval(timer) }
+  }, [turnRunning])
 
   useEffect(() => () => { clearTimeout(wheelBurst.current.historyTimer); clearTimeout(stopTimer.current) }, [])
 
@@ -750,7 +779,7 @@ export function Shell(props: ShellProps): React.JSX.Element {
   const overlayLength = (): number => {
     if (overlay === undefined) return 0
     if (overlay.kind === 'commands') return Math.min(matchingCommands(controller?.commandChoices() ?? [], editor.text).length, panelMaxItems)
-    if (overlay.kind === 'sessions') return Math.min(overlay.items.length, Math.max(1, Math.min(SESSION_ROWS, panelMaxItems)))
+    if (overlay.kind === 'sessions') return Math.min(overlay.items.length, Math.max(1, Math.min(SESSION_ROWS, panelMaxItems - 1)))
     if (overlay.kind === 'models') return overlay.loading ? 0 : Math.min(overlay.items.length, Math.max(1, Math.min(7, panelMaxItems)))
     if (overlay.kind === 'efforts') return overlay.loading ? 0 : Math.min(overlay.items.length, Math.max(1, Math.min(5, panelMaxItems)))
     if (overlay.kind === 'permissions') return Math.min((controller?.permissionNames() ?? []).length, panelMaxItems)
@@ -1041,7 +1070,18 @@ export function Shell(props: ShellProps): React.JSX.Element {
     + `${detailItem !== undefined ? '' : scroll > 0 ? ` · ↑ ${scroll} rows · End latest` : ' · live'}`,
     Math.max(0, transcriptWidth - 2 - displayWidth(transcriptHeading)),
   ).head
-  const statusLine = formatFooter(runtime, runtime.error ?? runtime.notice, Math.max(1, columns - margin * 2), !veryNarrow)
+  const footerCells = Math.max(1, columns - margin * 2)
+  // The elapsed chip rides the header, beside the title; the title keeps a
+  // minimum cell budget and the chip takes what is left, so the two can never
+  // wrap into a second header row — a taller header would push the frame past
+  // the screen and drag the composer's caret with it. A terminal too narrow to
+  // keep one readable title beside the chip keeps the title and drops the chip.
+  const elapsed = elapsedLabel(turnRunning ? state.timing : settledTiming(state.timing), clock, !compact)
+  const elapsedCells = elapsed === undefined ? 0 : displayWidth(elapsed)
+  const titleCells = compact ? 18 : 52
+  const timingChip = elapsed !== undefined && elapsedCells + 2 + titleCells <= footerCells ? elapsed : undefined
+  const chipCells = timingChip === undefined ? 0 : displayWidth(timingChip) + 2
+  const statusLine = formatFooter(runtime, runtime.error ?? runtime.notice, footerCells, !veryNarrow)
   const help = runtime.approval !== undefined
     ? 'y allow · n reject · Esc park'
     : runtime.questions !== undefined
@@ -1064,12 +1104,13 @@ export function Shell(props: ShellProps): React.JSX.Element {
   return (
     <Box width={columns} height={rows} flexDirection="column" backgroundColor={theme.canvas}>
       <Box paddingX={margin} paddingTop={compact ? 0 : 1} alignItems="center" flexShrink={0}>
-        {!compact && rows >= 28 && state.nodes.length === 0 && <Logo theme={theme} monochrome={theme.monochrome} />}
-        <Box marginLeft={!compact && rows >= 28 && state.nodes.length === 0 ? 3 : 0} flexDirection="column">
-          <Text bold color={theme.text}>{compact ? `dsh-tui · ${middleEllipsis(title, Math.max(8, columns - margin * 2 - 10))}` : 'DEEPSEEK / HARNESS'}</Text>
-          {!compact && <Text color={theme.accent}>Abyss Workbench · {theme.name}</Text>}
-          {!compact && <Text color={theme.muted}>{middleEllipsis(`Harness-native model + reasoning controls · ${title}`, Math.max(8, columns - 40))}</Text>}
+        {showWhale && <Logo theme={theme} monochrome={theme.monochrome} />}
+        <Box marginLeft={showWhale ? 3 : 0} flexDirection="column" flexGrow={1}>
+          <Text bold color={theme.text} wrap="truncate">{compact ? `dsh-tui · ${middleEllipsis(title, Math.max(8, footerCells - 10 - chipCells))}` : 'DEEPSEEK / HARNESS'}</Text>
+          {!compact && <Text color={theme.accent} wrap="truncate">Abyss Workbench · {theme.name}</Text>}
+          {!compact && <Text color={theme.muted} wrap="truncate">{middleEllipsis(`Harness-native model + reasoning controls · ${title}`, Math.max(8, columns - 40 - chipCells))}</Text>}
         </Box>
+        {timingChip !== undefined && <Box marginLeft={2} flexShrink={0}><Text bold color={theme.accent}>{timingChip}</Text></Box>}
       </Box>
 
       <Box marginX={margin} marginTop={compact ? 0 : 1} borderStyle={veryNarrow ? 'classic' : 'single'} borderColor={focus === 'transcript' ? theme.primary : theme.border} flexDirection="column" flexGrow={1} paddingX={1} overflow="hidden">
@@ -1089,7 +1130,7 @@ export function Shell(props: ShellProps): React.JSX.Element {
       </Box>
 
       <Box paddingX={margin} flexDirection="column" flexShrink={0}>
-        <Text color={runtime.error === undefined ? theme.muted : theme.danger}>{statusLine}</Text>
+        <Text color={runtime.error === undefined ? theme.muted : theme.danger} wrap="truncate">{statusLine}</Text>
         <Text color={quitArmed ? theme.warning : theme.accent}>{helpLine}</Text>
       </Box>
     </Box>

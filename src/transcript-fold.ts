@@ -95,6 +95,26 @@ interface PartialAssistant {
   readonly finish?: unknown
 }
 
+/**
+ * Task timing measured from the log's own turn brackets. The session layer
+ * enforces one open turn at a time, so the span between a `turn/start` and its
+ * matching `turn/end` is exactly how long that task ran.
+ */
+export interface TurnTiming {
+  /** The turn currently running, when one is open. */
+  readonly open?: { readonly turn: number; readonly startedAt: number }
+  /** Turns closed with a span both boundaries timestamped; an untimed turn is not counted. */
+  readonly measured: number
+  /** Sum of the measured spans — the conversation's task time so far. */
+  readonly workMs: number
+  /** Span of the most recently measured turn. */
+  readonly lastMs?: number
+  /** How that turn ended, as the log recorded it: `completed`, `aborted`, … */
+  readonly lastReason?: string
+}
+
+export const NO_TIMING: TurnTiming = Object.freeze({ measured: 0, workMs: 0 })
+
 export interface TranscriptState {
   readonly lastSeq: number
   readonly nodes: readonly TranscriptNode[]
@@ -105,6 +125,7 @@ export interface TranscriptState {
   readonly workflowIndex: Readonly<Record<string, string>>
   readonly metadata: Readonly<Record<string, unknown>>
   readonly diagnostics: readonly { readonly seq: number; readonly type: string; readonly data: unknown }[]
+  readonly timing: TurnTiming
   readonly gap?: { readonly expected: number; readonly received: number }
 }
 
@@ -118,6 +139,7 @@ export const EMPTY_TRANSCRIPT: TranscriptState = Object.freeze({
   workflowIndex: Object.freeze({}),
   metadata: Object.freeze({}),
   diagnostics: Object.freeze([]),
+  timing: NO_TIMING,
 })
 
 export const KNOWN_EVENT_TYPES = [
@@ -464,6 +486,36 @@ function foldActivity(state: TranscriptState, event: EventLike): TranscriptState
   return { ...state, lastSeq: event.seq, nodes: replaceNode(state.nodes, node) }
 }
 
+/**
+ * Fold a turn bracket into measured task time. Both boundaries carry the log's
+ * own clock, so the span is read rather than sampled; an event that arrived
+ * without a `time` contributes no span, because the fold never invents a
+ * duration it was not given.
+ */
+function foldTurnBoundary(state: TranscriptState, event: EventLike): TranscriptState {
+  const turn = number(record(event.data).turn)
+  const at = typeof event.time === 'number' && Number.isFinite(event.time) ? event.time : undefined
+  const { open, ...settled } = state.timing
+  if (event.type === 'turn/start') {
+    return { ...state, lastSeq: event.seq, timing: at === undefined ? settled : { ...settled, open: { turn, startedAt: at } } }
+  }
+  if (open === undefined || open.turn !== turn || at === undefined) return { ...state, lastSeq: event.seq, timing: settled }
+  // A crash-repaired closer reuses the last real event's timestamp, so a span
+  // is never negative in practice; clamping keeps a skewed clock from lying.
+  const span = Math.max(0, at - open.startedAt)
+  const reason = string(record(record(event.data).reason).kind)
+  return {
+    ...state,
+    lastSeq: event.seq,
+    timing: {
+      measured: settled.measured + 1,
+      workMs: settled.workMs + span,
+      lastMs: span,
+      ...(reason === '' ? {} : { lastReason: reason }),
+    },
+  }
+}
+
 function updateMetadata(state: TranscriptState, event: EventLike): TranscriptState {
   return { ...state, lastSeq: event.seq, metadata: { ...state.metadata, [event.type]: event.data } }
 }
@@ -480,6 +532,8 @@ export function foldTranscript(state: TranscriptState, event: EventLike): Transc
     return { ...state, lastSeq: event.seq, nodes: [...state.nodes, raw] }
   }
   switch (event.type) {
+    case 'turn/start':
+    case 'turn/end': return foldTurnBoundary(state, event)
     case 'user/message': return foldUserMessage(state, event)
     case 'assistant/chunk': return foldChunk(state, event)
     case 'assistant/message': return foldAssistantMessage(state, event)

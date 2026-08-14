@@ -25,10 +25,10 @@ The exact colored segments live in `src/ui/logo.generated.ts`; `MONO_LOGO_LINES`
 
 ## 2. Screen anatomy
 
-At 120×40 the layout is one continuous work surface with a fixed one-line header, scrollable transcript, context-sensitive overlay/card, composer, and one-line status/help footer.
+At 120×40 the layout is one continuous work surface with a fixed header, scrollable transcript, context-sensitive overlay/card, composer, and one-line status/help footer.
 
 ```text
-┌ dsh-tui · abyss ───────────────────────────────────────── session title ──┐
+┌ dsh-tui · abyss ────────────────────── session title ──────── ◷ 12s · total 4m12s ┐
 │                                                                          │
 │  You                                                                     │
 │  请检查登录流程，并修复失败测试。                                        │
@@ -50,12 +50,14 @@ At 120×40 the layout is one continuous work surface with a fixed one-line heade
 ├──────────────────────────────────────────────────────────────────────────┤
 │ > Type a message…                                                        │
 ├──────────────────────────────────────────────────────────────────────────┤
-│ deepseek-v4-flash · workspace-write · 18k/128k · plan off · todos 2     │
+│ deepseek-v4-flash · workspace-write · 18k/128k · plan off · todos 2        │
 │ Ctrl+P commands  Ctrl+S sessions  Shift+Tab permissions  Ctrl+X keys    │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
 At 80×24, header metadata collapses to title only, tool cards become one-line summaries, and the help row shows the three currently useful keys. At widths below 60, borders switch to plain `-`/`|`, cwd/title are middle-ellipsized by display cells, token breakdown moves into `/session-info`, and overlays use the full content width. The composer always retains at least three rows when multiline mode is active.
+
+The header closes with the elapsed chip, in accent weight, right of the title block; the title keeps a minimum cell budget and the chip takes the cells it leaves, so the two are laid out against one budget and the header can never wrap into a second row and push the frame past the screen. While a turn is open the chip counts that task in whole seconds on a one-second interval, which is the only timer the app runs; it stops when the turn closes, and the settled chip then states the last turn's span and the conversation's total task time (`◷ last 12s · total 4m12s`). One measured turn states a single number, because its last turn is its total; a narrow header keeps the running seconds, or the total once the task is done, and drops the pair. Spans are read from the `turn/start`/`turn/end` timestamps in the log, never sampled by the view, so a resumed session restates the same total and an untimestamped turn is left out instead of estimated. An open turn with no running agent — a wedged or failed loop — reads its settled facts rather than counting up.
 
 There is no permanent left sidebar. `Ctrl+S` opens a modal session picker and closes it after selection. P1 workflow/jobs and subagent trees are modal/list details, not competing columns. This explicitly rejects Grok's multi-root dashboard for v1 because the task requires one active session.
 

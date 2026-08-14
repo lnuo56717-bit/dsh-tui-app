@@ -50,6 +50,7 @@
     "test:ac:m4": "vitest run tests/m4 tests/m2/cjk-markdown.spec.ts tests/m2/property.spec.ts && node scripts/ac6.mjs && node scripts/ac7.mjs",
     "test:pty:m4": "node scripts/m4-pty.mjs",
     "test:ask-user": "node scripts/ask-user-e2e.mjs",
+    "test:timer": "node scripts/timer-e2e.mjs",
     "test:default-command": "node scripts/default-command-pty.mjs",
     "test:ac:all": "npm run test:ac && npm run test:ac:m2 && npm run test:ac:m3 && npm run test:ac:m4 && npm run test:pty:m4"
   },

@@ -3,12 +3,16 @@ import fc from 'fast-check'
 import { EMPTY_TRANSCRIPT, foldEvents, foldTranscript, type EventLike } from '../../src/transcript-fold.js'
 import { TranscriptStore } from '../../src/transcript-store.js'
 
-type Operation = { kind: 'user' | 'text' | 'unknown'; text: string }
+type Operation = { kind: 'user' | 'text' | 'unknown' | 'turn-start' | 'turn-end'; text: string }
 
 function compile(operations: readonly Operation[]): EventLike[] {
   return operations.map((operation, seq): EventLike => {
     if (operation.kind === 'user') return { seq, type: 'user/message', data: { role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: operation.text }] }, surfaceOp: 'append' }
     if (operation.kind === 'text') return { seq, type: 'assistant/chunk', data: { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: operation.text } } }
+    // Unbalanced turn brackets are generated on purpose: the timing fold has to
+    // stay a pure function of the events it was actually handed.
+    if (operation.kind === 'turn-start') return { seq, time: seq * 1_000, type: 'turn/start', data: { turn: 1 } }
+    if (operation.kind === 'turn-end') return { seq, time: seq * 1_000, type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } }
     return { seq, type: 'future/property-event', data: { text: operation.text }, ignorable: true }
   })
 }
@@ -17,7 +21,7 @@ describe('AC-8 property invariants', () => {
   it('full replay equals arbitrary incremental partitions and duplicate seq is identity', () => {
     fc.assert(fc.property(
       fc.array(fc.record({
-        kind: fc.constantFrom<Operation['kind']>('user', 'text', 'unknown'),
+        kind: fc.constantFrom<Operation['kind']>('user', 'text', 'unknown', 'turn-start', 'turn-end'),
         text: fc.string({ unit: fc.constantFrom('a', '中', '，', '🐋', '\n', ' ') }),
       }), { maxLength: 80 }),
       fc.array(fc.nat({ max: 10 }), { maxLength: 20 }),
