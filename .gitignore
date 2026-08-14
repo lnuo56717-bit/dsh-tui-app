@@ -14,6 +14,7 @@ coverage/
 .m3-results/
 .m4-results/
 .m4-home/
+.m5-results/
 assets/generated/
 *.tgz
 *.log

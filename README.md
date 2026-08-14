@@ -16,6 +16,7 @@ A full-screen terminal interface (TUI) for DeepSeek Harness (`dsh`), built as an
 - **Multiline editing & history** — multiline prompts, queued follow-ups, prompt history recall (`↑` on an empty composer; the wheel never recalls history), and explicit step steering.
 - **Live model & effort switching** — `/switch` changes the next not-yet-assembled step; `/effort` only offers exact-model levels advertised by the active adapter. Nothing is hard-coded: catalogs and capabilities come from `ctx.llm`.
 - **Reasoning disclosure** — Grok-style views over real dsh reasoning events: live tail, stable settled summary, bounded preview, and an independently scrollable detail view.
+- **Native structured questions** — the app registers the host's `userQuestions` provider, so a profile that loads `@deepseek-ai/dsh-tool-ask-user` gives the model a working `ask_user_question`: the tool blocks, the QuestionCard collects a keyboard answer, and the answer returns as an ordinary tool result. Only the active root agent may ask; a subagent's request is refused rather than answered on the user's behalf. See [Enabling ask_user_question](#enabling-ask_user_question).
 - **Session picker** — `/resume` (and `Ctrl+S`) lists persisted conversations by their durable title (or opening prompt), prompt count, and age, with a current-session marker.
 - **Safe status chrome** — projection-backed footer keeps only short fields (notice, ctx, short model, effort, permission, plan/todos); session ids and cwd live in `/session-info`; secret-like strings are always redacted; secrets and billing are never shown.
 - **Themes** — Abyss and Pearl with truecolor, 256-color, 16-color, and monochrome palettes. `auto` safely defaults to Abyss when the terminal background cannot be determined without a blocking query.
@@ -51,6 +52,27 @@ Resume a durable session:
 ```powershell
 dsh --profile tui --resume <session-id>
 ```
+
+### Enabling `ask_user_question`
+
+The app provides the question UI, but no dsh bundle loads the tool that lets the
+model ask. Add it once to the profile's own patch layer
+(`$DSH_HOME/profiles/tui/cordis.patch.yml`) and restart:
+
+```yaml
+- insert:
+    - id: tool-ask-user
+      name: '@deepseek-ai/dsh-tool-ask-user'
+```
+
+Confirm the composed tree with `dsh --profile tui --dump-config`, and the whole
+path — registration, the card, the returned answer — with `npm run test:ask-user`,
+which boots the real profile behind a read-only `--patch` overlay.
+
+Only enable this where a `userQuestions` provider exists: this app registers one,
+and the web UI ships `@deepseek-ai/dsh-client-ui-user-questions`. A profile
+without a provider (for example the `grok` TUI) fails every call with
+`NO_PROVIDER` instead of asking.
 
 ## Flags
 
@@ -126,6 +148,8 @@ npm run test:ac:all
 
 The full local acceptance requires the existing `dsh` launcher for AC-1 through AC-5. CI runs the static M4 suite on `windows-latest`; real-profile PTY acceptance remains a local/release gate because CI does not install another Harness copy.
 
+`npm run test:ask-user` is a local-only end-to-end check of the native question path: it boots the machine's own `tui` profile with a read-only `--patch` overlay, asserts `ask_user_question` is in the model-facing registry, answers the QuestionCard with real keystrokes, and asserts the tool stayed blocked until it did. It edits nothing under `$DSH_HOME` and deletes the session its own probe created.
+
 ## Known limitations
 
 - Windows Terminal is the supported Windows emulator; legacy conhost is best-effort monochrome.
@@ -138,6 +162,7 @@ The full local acceptance requires the existing `dsh` launcher for AC-1 through 
 - Images render as attachment labels, not terminal pixels. The whale is a pre-generated ASCII asset.
 - No transcript-content search, multi-root dashboard, remote attach, ACP bridge, persistent per-command grants, or invented `/auto` policy.
 - Workflow/subagent views are read-only durable summaries. They do not dispatch concurrent root sessions.
+- `ask_user_question` is answered only for the active root agent and only one request at a time; a subagent's or a concurrent second request is refused, never auto-answered. The tool is not in any dsh bundle by default — a profile must load it.
 - `auto` does not send a blocking terminal-background query; when detection is unreliable it chooses Abyss.
 
 ## License & provenance

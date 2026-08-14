@@ -5,6 +5,14 @@
   disabled: true
 
 - insert:
+    # Model-facing ask_user_question tool, mounted BEFORE tui-runner so the
+    # runner's loader.await() (src/index.ts) sees it registered before the
+    # agent is created; a profile-patch placement races the agent's tool
+    # snapshot and the tool silently never appears. The QuestionCard renderer
+    # in src/ui/app.tsx answers through the user-questions service it injects.
+    - id: tool-ask-user
+      name: '@deepseek-ai/dsh-tool-ask-user'
+
     - id: tui-startup
       name: 'dsh-tui-app/startup'
 

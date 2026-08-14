@@ -137,10 +137,12 @@ No “always allow this command” grant is shown because dsh exposes no equival
 | `1`–`9` | choose an option directly |
 | `Space` | toggle an option in multi-select |
 | `z` | edit the free-text row |
-| `Enter` | choose/advance; submit on final valid question |
+| `Enter` | choose/advance; commit the free-text row and leave it; submit on final valid question |
 | `Esc` | clear current selection, then park focus; never dismisses the question |
 
 Required questions cannot submit empty. `plan-review` intent highlights the configured approve option; every other answer declines according to the real dsh intent contract.
+
+The same card serves the model-facing `ask_user_question` tool (`@deepseek-ai/dsh-tool-ask-user`) through the `ctx.userQuestions` provider this app registers: the tool's step stays blocked until the card returns, and the answer becomes an ordinary tool result. The provider answers only for the active root agent and only one live request; a subagent's request or a second concurrent one is rejected, because inventing an answer — or letting a background agent capture the card — would put words in the user's mouth. Committing the free-text row must close it: an open editor would swallow the arrows that move between questions.
 
 ## 5. Slash command policy
 

@@ -536,13 +536,16 @@ export function Shell(props: ShellProps): React.JSX.Element {
       else { current.clear(); current.add(option.label) }
       selections[question.id] = [...current]
     }
+    // Finalizing always closes the free-text field: leaving it open swallowed the
+    // arrows that move between questions, stranding the card on question one.
+    const base = finalizeOnly ? { ...questionUi, customEditing: false } : questionUi
     if (question.multiSelect && !finalizeOnly) {
-      setQuestionUi({ ...questionUi, selections })
+      setQuestionUi({ ...base, selections })
       return
     }
     const answered = (item: typeof question): boolean => (selections[item.id]?.length ?? 0) > 0 || (questionUi.customs[item.id]?.trim() ?? '') !== ''
     if (!question.multiSelect && questionUi.index < request.questions.length - 1) {
-      setQuestionUi({ ...questionUi, selections, index: questionUi.index + 1, option: 0, customEditing: false })
+      setQuestionUi({ ...base, selections, index: questionUi.index + 1, option: 0, customEditing: false })
       return
     }
     if (request.questions.every(answered)) {
@@ -551,7 +554,7 @@ export function Shell(props: ShellProps): React.JSX.Element {
         ...((questionUi.customs[item.id]?.trim() ?? '') === '' ? {} : { custom: questionUi.customs[item.id]!.trim() }),
       }))
       controller?.answerQuestions(answers)
-    } else setQuestionUi({ ...questionUi, selections })
+    } else setQuestionUi({ ...base, selections })
   }
 
   const scrollTranscript = (direction: 'up' | 'down', amount = 1): void => {
