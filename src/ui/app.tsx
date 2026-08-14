@@ -76,23 +76,24 @@ function visibleWindow<T>(items: readonly T[], selected: number, limit: number):
   return items.slice(start, start + limit).map((item, offset) => ({ item, index: start + offset }))
 }
 
-function Panel({ overlay, editor, controller, runtime, store, theme, plain, width, summaries }: { overlay: Overlay; editor: EditorState; controller: InteractionController | undefined; runtime: RuntimeSnapshot; store: TranscriptStore; theme: Theme; plain: boolean; width: number; summaries: Record<string, SessionSummary> }): React.JSX.Element {
+function Panel({ overlay, editor, controller, runtime, store, theme, plain, width, summaries, maxItems }: { overlay: Overlay; editor: EditorState; controller: InteractionController | undefined; runtime: RuntimeSnapshot; store: TranscriptStore; theme: Theme; plain: boolean; width: number; summaries: Record<string, SessionSummary>; maxItems: number }): React.JSX.Element {
   const panelCells = Math.max(8, width - 4)
   if (overlay.kind === 'commands') {
-    const items = matchingCommands(controller?.commandChoices() ?? [], editor.text)
+    const items = matchingCommands(controller?.commandChoices() ?? [], editor.text).slice(0, maxItems)
     return <PanelFrame title="COMMAND SONAR" theme={theme} plain={plain}>{items.length === 0
       ? <Text color={theme.warning}>No matching command</Text>
       : items.map((item, index) => <Text key={`${item.source}:${item.name}`} color={index === overlay.selected ? theme.primary : theme.text} bold={index === overlay.selected}>
-          {index === overlay.selected ? '›' : ' '} /{item.name}<Text color={theme.muted}>  [{item.source}] {item.description}{item.inputHint === undefined ? '' : ` · ${item.inputHint}`}</Text>
+          {index === overlay.selected ? '›' : ' '} /{item.name}<Text color={theme.muted}>{middleEllipsis(`  [${item.source}] ${item.description}${item.inputHint === undefined ? '' : ` · ${item.inputHint}`}`, Math.max(0, panelCells - displayWidth(` /${item.name}`) - 2))}</Text>
         </Text>)}</PanelFrame>
   }
   if (overlay.kind === 'sessions') {
+    const limit = Math.max(1, Math.min(SESSION_ROWS, maxItems))
     const detail = sessionDetail(overlay.items[overlay.selected])
     return <PanelFrame title="SESSION SOUNDINGS" theme={theme} plain={plain}>{overlay.loading
       ? <Text color={theme.accent}>◌ Reading persisted sessions…</Text>
       : overlay.items.length === 0 ? <Text color={theme.muted}>No persisted sessions yet</Text>
         : <>
-            {visibleWindow(overlay.items, overlay.selected, SESSION_ROWS).map(({ item, index }) => {
+            {visibleWindow(overlay.items, overlay.selected, limit).map(({ item, index }) => {
               const summary = summaries[item.id]
               const meta = sessionMeta(item, summary)
               const label = sessionLabel(item, summary)
@@ -105,11 +106,12 @@ function Panel({ overlay, editor, controller, runtime, store, theme, plain, widt
           </>}</PanelFrame>
   }
   if (overlay.kind === 'models') {
+    const limit = Math.max(1, Math.min(7, maxItems))
     return <PanelFrame title="MODEL ROUTES · NEXT STEP" theme={theme} plain={plain}>{overlay.loading
       ? <Text color={theme.accent}>◌ Reading the Harness model catalog…</Text>
       : overlay.error !== undefined ? <Text color={theme.warning}>{overlay.error}</Text>
         : overlay.items.length === 0 ? <Text color={theme.muted}>No advertised models; /switch provider/model can still resolve an exact route.</Text>
-          : visibleWindow(overlay.items, overlay.selected, 7).map(({ item, index }) => {
+          : visibleWindow(overlay.items, overlay.selected, limit).map(({ item, index }) => {
               const detail = `${item.name === item.id ? '' : ` · ${item.name}`}${item.description === undefined ? '' : ` · ${item.description}`}`
               return <Text key={`${item.provider}/${item.id}`} color={index === overlay.selected ? theme.primary : theme.text} bold={index === overlay.selected}>
                 {middleEllipsis(`${index === overlay.selected ? '›' : ' '} ${item.current ? '●' : '○'} ${item.provider}/${item.id}${detail}`, panelCells)}
@@ -117,15 +119,16 @@ function Panel({ overlay, editor, controller, runtime, store, theme, plain, widt
             })}</PanelFrame>
   }
   if (overlay.kind === 'efforts') {
+    const limit = Math.max(1, Math.min(5, maxItems))
     return <PanelFrame title={middleEllipsis(`REASONING EFFORT · ${runtime.model}`, panelCells - 2)} theme={theme} plain={plain}>{overlay.loading
       ? <Text color={theme.accent}>◌ Resolving exact-model capabilities…</Text>
       : overlay.error !== undefined ? <Text color={theme.warning}>{overlay.error}</Text>
-        : visibleWindow(overlay.items, overlay.selected, 5).map(({ item, index }) => <Text key={item.id ?? 'default'} color={index === overlay.selected ? theme.primary : theme.text} bold={index === overlay.selected}>
+        : visibleWindow(overlay.items, overlay.selected, limit).map(({ item, index }) => <Text key={item.id ?? 'default'} color={index === overlay.selected ? theme.primary : theme.text} bold={index === overlay.selected}>
             {middleEllipsis(`${index === overlay.selected ? '›' : ' '} ${item.current ? '●' : '○'} ${item.name}${item.id === undefined ? ' · default' : ` · ${item.id}`}${item.description === undefined ? '' : ` · ${item.description}`}`, panelCells)}
           </Text>)}</PanelFrame>
   }
   if (overlay.kind === 'permissions') {
-    const names = controller?.permissionNames() ?? []
+    const names = (controller?.permissionNames() ?? []).slice(0, maxItems)
     return <PanelFrame title={overlay.forApproval ? 'ALLOW ONCE + CHANGE PRESET' : 'PERMISSION PRESETS'} theme={theme} plain={plain}>
       {names.map((name, index) => <Text key={name} color={index === overlay.selected ? theme.primary : theme.text} bold={index === overlay.selected}>
         {index === overlay.selected ? '›' : ' '} {name}
@@ -166,7 +169,7 @@ function Panel({ overlay, editor, controller, runtime, store, theme, plain, widt
         <Text>◇ {node.name} · {node.status} · {node.children.length} jobs</Text>
         {node.children.slice(0, 4).map(child => <Text key={`${child.seq}:${child.childId}`} color={theme.muted}>  └─ {child.label} · {child.phase ?? (child.outcome === undefined ? 'running' : 'done')}</Text>)}
       </Box>)}
-      {overlay.subagents.slice(0, 12).map(item => <Text key={item.id} color={item.kind === 'diagnostic' ? theme.warning : theme.text}>
+      {overlay.subagents.slice(0, maxItems).map(item => <Text key={item.id} color={item.kind === 'diagnostic' ? theme.warning : theme.text}>
         {'  '.repeat(Math.max(0, item.depth - 1))}└─ {item.label ?? item.id} · {item.kind === 'diagnostic' ? item.reason : `${item.mode} · ${item.activity}`}{item.hasChildren ? ' · children' : ''}
       </Text>)}
       {subagent !== undefined && <Text color={theme.muted}>subagent {safeInline(subagent)}{timing === undefined ? '' : ` · timing ${safeInline(timing)}`}</Text>}
@@ -206,7 +209,7 @@ function PanelFrame({ title, theme, children, plain }: { title: string; theme: T
 function ApprovalCard({ runtime, focused, theme, plain }: { runtime: RuntimeSnapshot; focused: boolean; theme: Theme; plain: boolean }): React.JSX.Element | null {
   const request = runtime.approval
   if (request === undefined) return null
-  return <Box borderStyle={plain ? 'classic' : 'double'} borderColor={focused ? theme.warning : theme.border} flexDirection="column" paddingX={1}>
+  return <Box borderStyle={plain ? 'classic' : 'double'} borderColor={focused ? theme.warning : theme.border} flexDirection="column" paddingX={1} flexShrink={0}>
     <Text bold color={theme.warning}>PERMISSION REQUIRED · {request.toolName}</Text>
     {request.reason !== undefined && <Text color={theme.text}>{request.reason}</Text>}
     {request.callId !== undefined && <Text color={theme.muted}>call {request.callId}</Text>}
@@ -221,7 +224,7 @@ function QuestionCard({ runtime, ui, focused, theme, plain }: { runtime: Runtime
   const question = request.questions[ui.index]
   if (question === undefined) return null
   const selected = new Set(ui.selections[question.id] ?? [])
-  return <Box borderStyle={plain ? 'classic' : 'double'} borderColor={focused ? theme.primary : theme.border} flexDirection="column" paddingX={1}>
+  return <Box borderStyle={plain ? 'classic' : 'double'} borderColor={focused ? theme.primary : theme.border} flexDirection="column" paddingX={1} flexShrink={0}>
     <Text bold color={theme.primary}>{question.header ?? 'QUESTION'} · {ui.index + 1}/{request.questions.length}</Text>
     <Text color={theme.text}>{question.question}</Text>
     {question.detail !== undefined && <Text color={theme.muted}>{question.detail}</Text>}
@@ -249,7 +252,7 @@ function Composer({ editor, focused, runtime, theme, plain, lines, hardwareCaret
 }): React.JSX.Element {
   const mode = runtime.agentStatus === 'running' ? 'FOLLOW-UP' : 'PROMPT'
   const context = contextStatus(runtime)
-  return <Box borderStyle={plain ? 'classic' : 'single'} borderColor={focused ? theme.primary : theme.border} minHeight={editor.multiline ? 6 : 4} paddingX={1} flexDirection="column">
+  return <Box borderStyle={plain ? 'classic' : 'single'} borderColor={focused ? theme.primary : theme.border} minHeight={editor.multiline ? 6 : 4} paddingX={1} flexDirection="column" flexShrink={0}>
     <Box justifyContent="space-between">
       <Text><Text bold color={theme.primary}>⌁ {mode}</Text>{!plain && <Text color={theme.muted}> · {editor.multiline ? 'multiline · Alt+Enter sends' : 'Enter sends · Ctrl+M multiline'}</Text>}</Text>
       {context !== undefined && <Text bold color={theme.accent}>{context}</Text>}
@@ -349,6 +352,13 @@ export function Shell(props: ShellProps): React.JSX.Element {
   const middleHeight = blockingRows + overlayRows + composerHeight
   const transcriptBottom = rows - 2 - middleHeight
   const transcriptWindow = viewportWindow(transcript.length, viewportRows, scroll)
+  // Rows the open overlay panel may occupy without pushing the frame past the
+  // terminal height: everything else is fixed, the transcript keeps its chrome,
+  // and the panel clips its list to the budget instead of overflowing. A frame
+  // taller than the screen scrolls the terminal and shifts the cursor suffix —
+  // the IME composition lands above the caret.
+  const panelBudget = Math.max(6, rows - (compact ? 6 : 10) - blockingRows - composerHeight)
+  const panelMaxItems = Math.max(1, panelBudget - 3)
 
   useEffect(() => {
     setBlockingFocused(true)
@@ -614,7 +624,7 @@ export function Shell(props: ShellProps): React.JSX.Element {
     setStopArmed(false)
     enterAt.current = 0
     if (editor.text.startsWith('/')) {
-      const items = matchingCommands(controller?.commandChoices() ?? [], editor.text)
+      const items = matchingCommands(controller?.commandChoices() ?? [], editor.text).slice(0, panelMaxItems)
       if (items.length > 0) runChoice(items[Math.min(overlay?.kind === 'commands' ? overlay.selected : 0, items.length - 1)]!)
       return
     }
@@ -739,10 +749,11 @@ export function Shell(props: ShellProps): React.JSX.Element {
   /** How many rows the open overlay offers, mirroring each branch's own bounds. */
   const overlayLength = (): number => {
     if (overlay === undefined) return 0
-    if (overlay.kind === 'commands') return matchingCommands(controller?.commandChoices() ?? [], editor.text).length
-    if (overlay.kind === 'sessions') return overlay.items.length
-    if (overlay.kind === 'models' || overlay.kind === 'efforts') return overlay.loading ? 0 : overlay.items.length
-    if (overlay.kind === 'permissions') return (controller?.permissionNames() ?? []).length
+    if (overlay.kind === 'commands') return Math.min(matchingCommands(controller?.commandChoices() ?? [], editor.text).length, panelMaxItems)
+    if (overlay.kind === 'sessions') return Math.min(overlay.items.length, Math.max(1, Math.min(SESSION_ROWS, panelMaxItems)))
+    if (overlay.kind === 'models') return overlay.loading ? 0 : Math.min(overlay.items.length, Math.max(1, Math.min(7, panelMaxItems)))
+    if (overlay.kind === 'efforts') return overlay.loading ? 0 : Math.min(overlay.items.length, Math.max(1, Math.min(5, panelMaxItems)))
+    if (overlay.kind === 'permissions') return Math.min((controller?.permissionNames() ?? []).length, panelMaxItems)
     return 0
   }
 
@@ -833,7 +844,7 @@ export function Shell(props: ShellProps): React.JSX.Element {
 
     if (overlay !== undefined) {
       if (overlay.kind === 'commands') {
-        const items = matchingCommands(controller?.commandChoices() ?? [], editor.text)
+        const items = matchingCommands(controller?.commandChoices() ?? [], editor.text).slice(0, panelMaxItems)
         if (key.escape) setOverlay(undefined)
         else if (key.upArrow) setOverlay({ ...overlay, selected: Math.max(0, overlay.selected - 1) })
         else if (key.downArrow || key.tab) setOverlay({ ...overlay, selected: Math.min(Math.max(0, items.length - 1), overlay.selected + 1) })
@@ -1073,7 +1084,7 @@ export function Shell(props: ShellProps): React.JSX.Element {
       <Box marginX={margin} flexDirection="column" flexShrink={0}>
         <ApprovalCard runtime={runtime} focused={blockingFocused} theme={theme} plain={veryNarrow} />
         <QuestionCard runtime={runtime} ui={questionUi} focused={blockingFocused} theme={theme} plain={veryNarrow} />
-        {overlay !== undefined && <Panel overlay={overlay} editor={editor} controller={controller} runtime={runtime} store={store} theme={theme} plain={veryNarrow} width={Math.max(10, columns - margin * 2)} summaries={summaries} />}
+        {overlay !== undefined && <Panel overlay={overlay} editor={editor} controller={controller} runtime={runtime} store={store} theme={theme} plain={veryNarrow} width={Math.max(10, columns - margin * 2)} summaries={summaries} maxItems={panelMaxItems} />}
         <Composer editor={editor} focused={focus === 'composer' && blockingFocused} runtime={runtime} theme={theme} plain={veryNarrow} lines={editorLines} hardwareCaret={caret !== undefined} />
       </Box>
 
