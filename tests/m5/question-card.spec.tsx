@@ -68,10 +68,21 @@ function harness(questions: RuntimeSnapshot['questions']) {
 
 const settle = (ms = 40): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
+async function untilFrame(app: ReturnType<typeof harness>, text: string, timeout = 2_000): Promise<void> {
+  const deadline = Date.now() + timeout
+  for (;;) {
+    if (app.frame().includes(text)) return
+    if (Date.now() > deadline) throw new Error(`timed out waiting for frame text: ${text}`)
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+}
+
 async function press(app: ReturnType<typeof harness>, keys: readonly string[]): Promise<void> {
   for (const key of keys) {
     app.stdin.write(key)
-    await settle()
+    // Generous gap so slow CI runners finish parsing and rendering one
+    // keystroke (Ink buffers escapes ~20ms) before the next one lands.
+    await settle(80)
   }
 }
 
@@ -83,27 +94,26 @@ describe('QuestionCard answers a real ask_user_question request', () => {
   it('walks options with arrows, multi-selects with Space, takes free text with z, and submits with Enter', async () => {
     const app = harness(REQUEST)
     try {
-      await settle(120)
-      expect(app.frame()).toContain('范围 · 1/2')
+      await untilFrame(app, '范围 · 1/2')
       expect(app.frame()).toContain('1. [ ] 折叠工具输出')
 
       // Arrow to the second option, Space it, arrow again, Space the third.
       await press(app, [DOWN, ' ', DOWN, ' '])
+      await untilFrame(app, '3. [x] 复制能力')
       expect(app.frame()).toContain('2. [x] 滚动手感')
-      expect(app.frame()).toContain('3. [x] 复制能力')
       // A multi-select question must not submit on Space.
       expect(app.answered).toHaveLength(0)
 
       // z opens the free-text field; Enter finalizes it without leaving the card stuck.
       await press(app, ['z'])
       await press(app, ['都', '要'])
-      expect(app.frame()).toContain('z. Other: 都要')
+      await untilFrame(app, 'z. Other: 都要')
       await press(app, [ENTER])
       expect(app.answered).toHaveLength(0)
 
       // Right moves to the next question; a digit answers it and submits the set.
       await press(app, [RIGHT])
-      expect(app.frame()).toContain('顺序 · 2/2')
+      await untilFrame(app, '顺序 · 2/2')
       await press(app, ['1'])
 
       expect(app.answered).toHaveLength(1)
