@@ -1,0 +1,19 @@
+dsh-tui-app third-party and brand notice
+
+Chafa
+  Project: https://github.com/hpjansson/chafa
+  Version used to generate the bundled character art: 1.18.2
+  License: LGPL-3.0-or-later (CLI/library); Chafa is a build-time tool and is
+  not redistributed in the dsh-tui-app package.
+
+DeepSeek logo source
+  Official organization: https://github.com/deepseek-ai
+  Source image: https://avatars.githubusercontent.com/u/148330874?v=4&s=512
+  SHA-256: 55e6e0c1ba0c453749211368b8a26e00f470b4ab696ce1fed539d70777d4aab1
+  The DeepSeek name and whale logo are trademarks or brand assets of their
+  respective owner. Their appearance identifies the intended Harness surface
+  and does not imply affiliation, sponsorship, or endorsement.
+
+grok-build
+  UX reference only; locked commit eb267feff13129e568df38fb6fdf0ceb65f735d6.
+  No Grok source or visual asset is copied into the implementation.

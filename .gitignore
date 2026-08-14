@@ -1,0 +1,12 @@
+node_modules/
+lib/
+coverage/
+.m0-artifacts/
+.m0-grok/
+.m0-spike/node_modules/
+.m1-home/
+.m1-results/
+.m1-tools/
+assets/generated/
+*.tgz
+*.log

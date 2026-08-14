@@ -1,0 +1,15 @@
+{
+  "name": "dsh-tui-m0-spike",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "spike": "node spike.mjs"
+  },
+  "dependencies": {
+    "ink": "7.1.1",
+    "react": "19.2.8",
+    "string-width": "8.2.2",
+    "strip-ansi": "7.2.0",
+    "wrap-ansi": "9.0.0"
+  }
+}

@@ -1,0 +1,17 @@
+# dsh-tui-app is an ordinary out-of-tree app bundle layered over dsh-base.
+# Startup owns this app's command-line grammar; the runner mounts only after
+# startup publishes a successful parse result.
+- id: hmr
+  disabled: true
+
+- insert:
+    - id: tui-startup
+      name: 'dsh-tui-app/startup'
+
+    - id: tui-runner
+      name: 'dsh-tui-app'
+      inject: [tuiStartup]
+      config:
+        resume: !!js ctx.tuiStartup.resume
+        theme: !!js ctx.tuiStartup.theme
+        color: !!js ctx.tuiStartup.color
