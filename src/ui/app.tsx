@@ -332,7 +332,10 @@ export function Shell(props: ShellProps): React.JSX.Element {
   const composerWidth = Math.max(10, columns - margin * 2 - 4)
   const editorLayout = layoutEditor(editor, Math.max(8, composerWidth), editor.multiline ? 5 : 3)
   const editorLines = editorLayout.lines
-  const composerFocused = focus === 'composer' && blockingFocused && overlay === undefined
+  // The commands overlay is the one overlay whose keystrokes still edit the
+  // composer (the `/` filter), so the IME caret must stay parked there while
+  // it is open — otherwise pre-edit letters compose at the bottom of the page.
+  const composerFocused = focus === 'composer' && blockingFocused && (overlay === undefined || overlay.kind === 'commands')
   const caret = composerFocused ? composerCaret({ rows, margin, lines: editorLines }) : undefined
   // Ink's suffix math assumes the pre-suffix cursor sits one line BELOW the
   // frame (a trailing newline), but a fullscreen frame has none: the cursor

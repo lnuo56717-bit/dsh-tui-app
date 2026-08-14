@@ -2,10 +2,20 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import { EMPTY_TRANSCRIPT, foldEvents, foldTranscript, type EventLike, type TranscriptState } from './transcript-fold.js'
 
+/**
+ * Events stream in bursts (tokens, tool chunks) on separate macrotasks, so a
+ * microtask coalescer still renders once per event. Budgeting notifications
+ * keeps the frame rate capped during bursts — the TUI's keystroke handling
+ * stays responsive while the agent's own activity floods the event log.
+ */
+const NOTIFY_INTERVAL_MS = 40
+
 export class TranscriptStore {
   private state: TranscriptState
   private readonly listeners = new Set<() => void>()
   private notifyQueued = false
+  private notifyTimer: ReturnType<typeof setTimeout> | undefined
+  private lastNotifyAt = 0
 
   constructor(initial: TranscriptState = EMPTY_TRANSCRIPT) {
     this.state = initial
@@ -33,10 +43,14 @@ export class TranscriptStore {
   private notify(): void {
     if (this.notifyQueued) return
     this.notifyQueued = true
-    queueMicrotask(() => {
+    const elapsed = Date.now() - this.lastNotifyAt
+    const delay = Math.max(0, NOTIFY_INTERVAL_MS - elapsed)
+    this.notifyTimer = setTimeout(() => {
+      this.notifyTimer = undefined
       this.notifyQueued = false
+      this.lastNotifyAt = Date.now()
       for (const listener of this.listeners) listener()
-    })
+    }, delay)
   }
 }
 

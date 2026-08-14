@@ -80,4 +80,24 @@ describe('IME pre-edit text follows the composer caret', () => {
       app.instance.unmount()
     }
   })
+
+  it('keeps the caret parked while the commands overlay filters the draft', async () => {
+    const app = harness()
+    try {
+      await until(() => app.caret())
+      // `/` opens COMMAND SONAR, whose keystrokes still edit the composer —
+      // the IME must keep composing at the caret, not at the bottom row.
+      app.stdin.write('/')
+      await until(() => app.frame().includes('COMMAND SONAR') ? app.frame() : undefined)
+      expect(app.caret()).toEqual({ up: 3, column: 7 })
+      app.stdin.write('k')
+      await until(() => {
+        const caret = app.caret()
+        return caret !== undefined && caret.column === 8 ? caret : undefined
+      })
+      expect(app.caret()).toEqual({ up: 3, column: 8 })
+    } finally {
+      app.instance.unmount()
+    }
+  })
 })
