@@ -69,6 +69,18 @@ function tokenUsage(runtime: RuntimeSnapshot): { input: number; output: number; 
   return { input: uncached, output, read, write }
 }
 
+/**
+ * Cache-hit share of billed prompt input over the whole durable log — the same
+ * metric the web UI's stats line prints. Absent until the log billed input.
+ */
+export function cacheHitLabel(runtime: RuntimeSnapshot): string | undefined {
+  const usage = tokenUsage(runtime)
+  if (usage === undefined) return undefined
+  const billed = usage.input + usage.read + usage.write
+  if (billed === 0) return undefined
+  return `cache hit ${Math.round(usage.read / billed * 100)}%`
+}
+
 export function contextPressure(runtime: RuntimeSnapshot): { used: number; capacity: number; percent: number } | undefined {
   const value = record(projectionValue(runtime, 'contextPressure'))
   if (value === undefined) return undefined
@@ -145,10 +157,20 @@ export function statusSegments(runtime: RuntimeSnapshot, detail = true): string[
   return segments.map(redactSecrets)
 }
 
+/**
+ * The footer's status row is fixed at one line, and the composer's caret is
+ * measured from that fact. Multi-line signals (a dsh command result like
+ * `/goal`'s status view) are folded onto that one line, or the footer would
+ * grow under the composer and drag the caret suffix off the draft.
+ */
+function singleLineSignal(value: string): string {
+  return value.split(/\r?\n/u).map(line => line.trim()).filter(line => line !== '').join(' · ')
+}
+
 /** Fit notice + public facts without middle-ellipsis, which can splice a UUID into the model field. */
 export function formatFooter(runtime: RuntimeSnapshot, signal: string | undefined, cells: number, detail = true): string {
   const facts = statusSegments(runtime, detail)
-  const notice = signal === undefined || signal.trim() === '' ? undefined : redactSecrets(signal)
+  const notice = signal === undefined || signal.trim() === '' ? undefined : redactSecrets(singleLineSignal(signal))
   const limit = Math.max(1, cells)
   const render = (parts: string[]): string => parts.join(' · ')
   if (notice === undefined) {

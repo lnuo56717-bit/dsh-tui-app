@@ -11,7 +11,7 @@ import { displayWidth, graphemes, middleEllipsis, sliceCells, takeCells } from '
 import { parseMouseBurst, parseWheelBurst, type MouseReport } from './mouse.js'
 import { redactSecrets } from './secrets.js'
 import { Logo } from './logo.js'
-import { contextStatus, formatFooter, padCells, projectionValue, sessionInfoLines, sessionTitle } from './status.js'
+import { cacheHitLabel, contextStatus, formatFooter, padCells, projectionValue, sessionInfoLines, sessionTitle } from './status.js'
 import { sessionDetail, sessionLabel, sessionMeta } from './session-picker.js'
 import { resolveTheme, type Theme } from './theme.js'
 import { presentReasoning } from './reasoning-view.js'
@@ -1071,16 +1071,24 @@ export function Shell(props: ShellProps): React.JSX.Element {
     Math.max(0, transcriptWidth - 2 - displayWidth(transcriptHeading)),
   ).head
   const footerCells = Math.max(1, columns - margin * 2)
-  // The elapsed chip rides the header, beside the title; the title keeps a
-  // minimum cell budget and the chip takes what is left, so the two can never
-  // wrap into a second header row — a taller header would push the frame past
-  // the screen and drag the composer's caret with it. A terminal too narrow to
-  // keep one readable title beside the chip keeps the title and drops the chip.
+  // The header's right-hand chip stack: the elapsed chip with the cache-hit
+  // rate under it (beside it on one row when the header collapses to compact
+  // mode). The title keeps a minimum cell budget and the chips take the rest,
+  // so the header can never wrap into another row — a taller header would push
+  // the frame past the screen and drag the composer's caret with it. A
+  // terminal too narrow to keep one readable title beside a chip keeps the
+  // title and drops that chip.
   const elapsed = elapsedLabel(turnRunning ? state.timing : settledTiming(state.timing), clock, !compact)
   const elapsedCells = elapsed === undefined ? 0 : displayWidth(elapsed)
   const titleCells = compact ? 18 : 52
   const timingChip = elapsed !== undefined && elapsedCells + 2 + titleCells <= footerCells ? elapsed : undefined
-  const chipCells = timingChip === undefined ? 0 : displayWidth(timingChip) + 2
+  const cache = cacheHitLabel(runtime)
+  const cacheCells = cache === undefined ? 0 : displayWidth(cache)
+  const cacheChip = cache !== undefined && cacheCells + 2 + titleCells <= footerCells ? cache : undefined
+  const chipsWidth = timingChip === undefined && cacheChip === undefined ? 0
+    : compact
+      ? (timingChip === undefined ? 0 : elapsedCells) + (cacheChip === undefined ? 0 : cacheCells + 1) + 2
+      : Math.max(timingChip === undefined ? 0 : elapsedCells, cacheChip === undefined ? 0 : cacheCells) + 2
   const statusLine = formatFooter(runtime, runtime.error ?? runtime.notice, footerCells, !veryNarrow)
   const help = runtime.approval !== undefined
     ? 'y allow · n reject · Esc park'
@@ -1106,11 +1114,16 @@ export function Shell(props: ShellProps): React.JSX.Element {
       <Box paddingX={margin} paddingTop={compact ? 0 : 1} alignItems="center" flexShrink={0}>
         {showWhale && <Logo theme={theme} monochrome={theme.monochrome} />}
         <Box marginLeft={showWhale ? 3 : 0} flexDirection="column" flexGrow={1}>
-          <Text bold color={theme.text} wrap="truncate">{compact ? `dsh-tui · ${middleEllipsis(title, Math.max(8, footerCells - 10 - chipCells))}` : 'DEEPSEEK / HARNESS'}</Text>
+          <Text bold color={theme.text} wrap="truncate">{compact ? `dsh-tui · ${middleEllipsis(title, Math.max(8, footerCells - 10 - chipsWidth))}` : 'DEEPSEEK / HARNESS'}</Text>
           {!compact && <Text color={theme.accent} wrap="truncate">Abyss Workbench · {theme.name}</Text>}
-          {!compact && <Text color={theme.muted} wrap="truncate">{middleEllipsis(`Harness-native model + reasoning controls · ${title}`, Math.max(8, columns - 40 - chipCells))}</Text>}
+          {!compact && <Text color={theme.muted} wrap="truncate">{middleEllipsis(`Harness-native model + reasoning controls · ${title}`, Math.max(8, columns - 40 - chipsWidth))}</Text>}
         </Box>
-        {timingChip !== undefined && <Box marginLeft={2} flexShrink={0}><Text bold color={theme.accent}>{timingChip}</Text></Box>}
+        {(timingChip !== undefined || cacheChip !== undefined) && (
+          <Box marginLeft={2} flexShrink={0} flexDirection={compact ? 'row' : 'column'} justifyContent="center">
+            {timingChip !== undefined && <Text bold color={theme.accent}>{timingChip}</Text>}
+            {cacheChip !== undefined && <Text color={theme.muted}>{compact ? ` ${cacheChip}` : cacheChip}</Text>}
+          </Box>
+        )}
       </Box>
 
       <Box marginX={margin} marginTop={compact ? 0 : 1} borderStyle={veryNarrow ? 'classic' : 'single'} borderColor={focus === 'transcript' ? theme.primary : theme.border} flexDirection="column" flexGrow={1} paddingX={1} overflow="hidden">

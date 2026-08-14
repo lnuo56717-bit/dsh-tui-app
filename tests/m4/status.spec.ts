@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { RuntimeSnapshot } from '../../src/interaction-controller.js'
-import { formatFooter, sessionInfoLines, shortModelLabel, statusSegments } from '../../src/ui/status.js'
+import { cacheHitLabel, formatFooter, sessionInfoLines, shortModelLabel, statusSegments } from '../../src/ui/status.js'
 
 const base: RuntimeSnapshot = {
   sessionId: 'session-actual', cwd: 'C:\\项目\\鲸鱼', model: 'deepseek/chat', agentStatus: 'idle', permission: undefined,
@@ -56,5 +56,37 @@ describe('M4 real-fact status formatting', () => {
     const detail = sessionInfoLines(runtime).join('\n')
     expect(detail).toContain('session      019ffeaf-b649-7070-8e59-18-4d22-bdc9-0b1269de95ab')
     expect(detail).not.toContain('sk-tui-fake-key-0123456789')
+  })
+
+  it('folds a multi-line dsh command result onto the single footer line', () => {
+    const runtime: RuntimeSnapshot = {
+      ...base,
+      notice: 'Goal created\nStatus: active\nObjective: fix the caret\n\nCommands: /goal pause',
+    }
+    const line = formatFooter(runtime, runtime.notice, 200)
+    expect(line).toContain('Goal created · Status: active · Objective: fix the caret · Commands: /goal pause')
+    expect(line).not.toContain('\n')
+    // A multi-line harness error collapses the same way.
+    const error = formatFooter(runtime, 'boom line one\nboom line two', 200)
+    expect(error).toContain('boom line one · boom line two')
+    expect(error).not.toContain('\n')
+  })
+
+  it('reports the web-metric cache hit rate from the token projection', () => {
+    expect(cacheHitLabel(base)).toBeUndefined()
+    const hit: RuntimeSnapshot = { ...base, projection: { asOfSeq: 1, values: {
+      tokenUsage: { uncachedInputTokens: 10, outputTokens: 5, cacheReadTokens: 90, cacheWriteTokens: 0 },
+    } } }
+    expect(cacheHitLabel(hit)).toBe('cache hit 90%')
+    // Cache writes count as billed input, so a write-only session reads as 0%.
+    const miss: RuntimeSnapshot = { ...base, projection: { asOfSeq: 1, values: {
+      tokenUsage: { uncachedInputTokens: 75, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 25 },
+    } } }
+    expect(cacheHitLabel(miss)).toBe('cache hit 0%')
+    // Nothing billed yet: the meter stays silent instead of inventing a rate.
+    const silent: RuntimeSnapshot = { ...base, projection: { asOfSeq: 1, values: {
+      tokenUsage: { uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    } } }
+    expect(cacheHitLabel(silent)).toBeUndefined()
   })
 })
