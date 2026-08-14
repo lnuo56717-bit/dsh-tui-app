@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const image = join(root, 'assets', 'reference', 'deepseek-github-avatar.png')
+const outputPath = join(root, 'src', 'ui', 'logo.generated.ts')
 const candidates = process.platform === 'win32'
   ? [join(root, '.m1-tools', 'chafa', 'chafa-1.18.2-1-x86_64-win', 'Chafa.exe')]
   : ['chafa']
@@ -14,6 +15,14 @@ const expectedImageSha256 = '55e6e0c1ba0c453749211368b8a26e00f470b4ab696ce1fed53
 
 const actual = createHash('sha256').update(readFileSync(image)).digest('hex')
 if (actual !== expectedImageSha256) throw new Error(`DeepSeek logo SHA-256 mismatch: ${actual}`)
+
+// The generated logo ships with the repository. Chafa is only needed to
+// regenerate it locally (e.g. after replacing the reference image), so a
+// build without Chafa — CI runners — keeps the checked-in artifact as-is.
+if (!candidates.some(existsSync) && existsSync(outputPath)) {
+  console.log('Chafa not found; keeping the checked-in src/ui/logo.generated.ts')
+  process.exit(0)
+}
 
 const common = ['--format', 'symbols', '--probe', 'off', '--relative', 'off', '--animate', 'off', '--size', '30x14', '--stretch', '--fg-only', '--invert', '--symbols', 'ascii', '--color-extractor', 'median', '--dither', 'none']
 function run(args) {
