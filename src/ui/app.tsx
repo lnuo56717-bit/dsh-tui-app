@@ -666,7 +666,13 @@ export function Shell(props: ShellProps): React.JSX.Element {
       if (question === undefined) return
       if (key.ctrl && input === 'c') { controller?.cancel(); return }
       if (questionUi.customEditing) {
+        // Arrows leave free-text mode first and then act, so a card with an
+        // open "z. Other" field can still be walked and answered by keyboard.
         if (key.escape) setQuestionUi({ ...questionUi, customEditing: false })
+        else if (key.leftArrow) setQuestionUi({ ...questionUi, customEditing: false, index: Math.max(0, questionUi.index - 1), option: 0 })
+        else if (key.rightArrow) setQuestionUi({ ...questionUi, customEditing: false, index: Math.min(runtime.questions.questions.length - 1, questionUi.index + 1), option: 0 })
+        else if (key.upArrow) setQuestionUi({ ...questionUi, customEditing: false, option: Math.max(0, questionUi.option - 1) })
+        else if (key.downArrow) setQuestionUi({ ...questionUi, customEditing: false, option: Math.min(Math.max(0, question.options.length - 1), questionUi.option + 1) })
         else if (key.backspace || key.delete) setQuestionUi({ ...questionUi, customs: { ...questionUi.customs, [question.id]: graphemes(questionUi.customs[question.id] ?? '').slice(0, -1).join('') } })
         else if (key.return) answerCurrentQuestion(undefined, true)
         else if (!key.ctrl && !key.meta && input !== '') setQuestionUi({ ...questionUi, customs: { ...questionUi.customs, [question.id]: (questionUi.customs[question.id] ?? '') + input } })
