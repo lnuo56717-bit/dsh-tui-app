@@ -1,27 +1,39 @@
-import React, { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
-import { Box, Text, useApp, useInput, useWindowSize } from 'ink'
+import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { Box, Text, useApp, useInput, useStdout, useWindowSize } from 'ink'
 import type { TuiStartupValues } from '../startup.js'
+import { copyNotice, copyToClipboard } from '../clipboard.js'
 import {
-  type CommandChoice, InteractionController, type QuestionAnswerItem, type RuntimeSnapshot, type SessionChoice, type SubagentChoice,
+  type CommandChoice, type EffortChoice, InteractionController, type ModelChoice, type QuestionAnswerItem, type RuntimeSnapshot, type SessionChoice, type SessionSummary, type SubagentChoice,
 } from '../interaction-controller.js'
 import { TranscriptStore } from '../transcript-store.js'
-import { cursorParts, deleteForward, deleteToEnd, deleteToStart, deleteWord, EMPTY_EDITOR, backspace, insertText, moveCursor, moveCursorTo, type EditorState } from './editor.js'
-import { graphemes, middleEllipsis } from './display-width.js'
+import { deleteForward, deleteToEnd, deleteToStart, deleteWord, EMPTY_EDITOR, backspace, insertText, moveCursor, moveCursorTo, presentEditor, type EditorLine, type EditorState } from './editor.js'
+import { displayWidth, graphemes, middleEllipsis, takeCells } from './display-width.js'
+import { parseWheelBurst } from './mouse.js'
+import { redactSecrets } from './secrets.js'
 import { Logo } from './logo.js'
-import { projectionValue, sessionInfoLines, sessionTitle, statusSegments } from './status.js'
+import { contextStatus, formatFooter, padCells, projectionValue, sessionInfoLines, sessionTitle } from './status.js'
+import { sessionDetail, sessionLabel, sessionMeta } from './session-picker.js'
 import { resolveTheme, type Theme } from './theme.js'
-import { TranscriptView } from './transcript-view.js'
+import { presentReasoning } from './reasoning-view.js'
+import { transcriptRows } from './transcript-rows.js'
+import { composerCaret, CURSOR_HIDE, CURSOR_SHOW, moveCursorSequence } from './cursor.js'
+import { terminalSequences } from './terminal.js'
+import { focusableBlocks, ReasoningDetailView, TranscriptView, viewportWindow, type TranscriptBlockRef } from './transcript-view.js'
 
 export interface ShellProps extends TuiStartupValues {
   store?: TranscriptStore
   controller?: InteractionController
   sessionId?: string
   model?: string
+  /** Overrides the stream the caret sequences are written to; tests supply a fake TTY. */
+  stdout?: Pick<NodeJS.WriteStream, 'write'> & { isTTY?: boolean }
 }
 
 type Overlay =
   | { kind: 'commands'; selected: number }
   | { kind: 'sessions'; selected: number; loading: boolean; items: SessionChoice[] }
+  | { kind: 'models'; selected: number; loading: boolean; items: ModelChoice[]; error?: string }
+  | { kind: 'efforts'; selected: number; loading: boolean; items: EffortChoice[]; error?: string }
   | { kind: 'permissions'; selected: number; forApproval: boolean }
   | { kind: 'workflows'; loading: boolean; subagents: SubagentChoice[]; error?: string }
   | { kind: 'help' | 'keys' | 'session-info' | 'confirm-danger' | 'confirm-new' }
@@ -43,6 +55,11 @@ const READ_ONLY_RUNTIME: RuntimeSnapshot = Object.freeze({
 const noopSubscribe = (): (() => void) => () => {}
 const readOnlySnapshot = (): RuntimeSnapshot => READ_ONLY_RUNTIME
 
+/** Rows moved per wheel notch. Matches the three-line convention of terminal pagers. */
+const WHEEL_ROWS = 3
+/** Persisted sessions listed at once in the picker. */
+const SESSION_ROWS = 7
+
 export function borderStyleForWidth(columns: number): 'classic' | 'single' {
   return columns < 60 ? 'classic' : 'single'
 }
@@ -52,7 +69,13 @@ function matchingCommands(items: readonly CommandChoice[], text: string): Comman
   return items.filter(item => item.name.includes(query)).slice(0, 9)
 }
 
-function Panel({ overlay, editor, controller, runtime, store, theme, plain }: { overlay: Overlay; editor: EditorState; controller: InteractionController | undefined; runtime: RuntimeSnapshot; store: TranscriptStore; theme: Theme; plain: boolean }): React.JSX.Element {
+function visibleWindow<T>(items: readonly T[], selected: number, limit: number): Array<{ item: T; index: number }> {
+  const start = Math.max(0, Math.min(selected - Math.floor(limit / 2), Math.max(0, items.length - limit)))
+  return items.slice(start, start + limit).map((item, offset) => ({ item, index: start + offset }))
+}
+
+function Panel({ overlay, editor, controller, runtime, store, theme, plain, width, summaries }: { overlay: Overlay; editor: EditorState; controller: InteractionController | undefined; runtime: RuntimeSnapshot; store: TranscriptStore; theme: Theme; plain: boolean; width: number; summaries: Record<string, SessionSummary> }): React.JSX.Element {
+  const panelCells = Math.max(8, width - 4)
   if (overlay.kind === 'commands') {
     const items = matchingCommands(controller?.commandChoices() ?? [], editor.text)
     return <PanelFrame title="COMMAND SONAR" theme={theme} plain={plain}>{items.length === 0
@@ -62,11 +85,41 @@ function Panel({ overlay, editor, controller, runtime, store, theme, plain }: { 
         </Text>)}</PanelFrame>
   }
   if (overlay.kind === 'sessions') {
+    const detail = sessionDetail(overlay.items[overlay.selected])
     return <PanelFrame title="SESSION SOUNDINGS" theme={theme} plain={plain}>{overlay.loading
       ? <Text color={theme.accent}>◌ Reading persisted sessions…</Text>
       : overlay.items.length === 0 ? <Text color={theme.muted}>No persisted sessions yet</Text>
-        : overlay.items.slice(0, 9).map((item, index) => <Text key={item.id} color={index === overlay.selected ? theme.primary : theme.text} bold={index === overlay.selected}>
-            {index === overlay.selected ? '›' : ' '} {item.id}<Text color={theme.muted}>  {item.cwd ?? 'cwd unknown'} · {new Date(item.createdAt).toLocaleString()}</Text>
+        : <>
+            {visibleWindow(overlay.items, overlay.selected, SESSION_ROWS).map(({ item, index }) => {
+              const summary = summaries[item.id]
+              const meta = sessionMeta(item, summary)
+              const label = sessionLabel(item, summary)
+              return <Text key={item.id} color={index === overlay.selected ? theme.primary : theme.text} bold={index === overlay.selected}>
+                {index === overlay.selected ? '›' : ' '} {item.current ? '●' : '○'} {padCells(label, Math.max(4, panelCells - displayWidth(meta) - 6))}
+                <Text color={theme.muted}>  {meta}</Text>
+              </Text>
+            })}
+            {detail !== undefined && <Text color={theme.muted}>{middleEllipsis(detail, panelCells)}</Text>}
+          </>}</PanelFrame>
+  }
+  if (overlay.kind === 'models') {
+    return <PanelFrame title="MODEL ROUTES · NEXT STEP" theme={theme} plain={plain}>{overlay.loading
+      ? <Text color={theme.accent}>◌ Reading the Harness model catalog…</Text>
+      : overlay.error !== undefined ? <Text color={theme.warning}>{overlay.error}</Text>
+        : overlay.items.length === 0 ? <Text color={theme.muted}>No advertised models; /switch provider/model can still resolve an exact route.</Text>
+          : visibleWindow(overlay.items, overlay.selected, 7).map(({ item, index }) => {
+              const detail = `${item.name === item.id ? '' : ` · ${item.name}`}${item.description === undefined ? '' : ` · ${item.description}`}`
+              return <Text key={`${item.provider}/${item.id}`} color={index === overlay.selected ? theme.primary : theme.text} bold={index === overlay.selected}>
+                {middleEllipsis(`${index === overlay.selected ? '›' : ' '} ${item.current ? '●' : '○'} ${item.provider}/${item.id}${detail}`, panelCells)}
+              </Text>
+            })}</PanelFrame>
+  }
+  if (overlay.kind === 'efforts') {
+    return <PanelFrame title={middleEllipsis(`REASONING EFFORT · ${runtime.model}`, panelCells - 2)} theme={theme} plain={plain}>{overlay.loading
+      ? <Text color={theme.accent}>◌ Resolving exact-model capabilities…</Text>
+      : overlay.error !== undefined ? <Text color={theme.warning}>{overlay.error}</Text>
+        : visibleWindow(overlay.items, overlay.selected, 5).map(({ item, index }) => <Text key={item.id ?? 'default'} color={index === overlay.selected ? theme.primary : theme.text} bold={index === overlay.selected}>
+            {middleEllipsis(`${index === overlay.selected ? '›' : ' '} ${item.current ? '●' : '○'} ${item.name}${item.id === undefined ? ' · default' : ` · ${item.id}`}${item.description === undefined ? '' : ` · ${item.description}`}`, panelCells)}
           </Text>)}</PanelFrame>
   }
   if (overlay.kind === 'permissions') {
@@ -87,9 +140,11 @@ function Panel({ overlay, editor, controller, runtime, store, theme, plain }: { 
   </PanelFrame>
   if (overlay.kind === 'keys') return <PanelFrame title="KEY REFERENCE" theme={theme} plain={plain}>
     <Text><Text bold>Send</Text>  Enter prompt · Ctrl+M multiline · Alt+Enter send · Ctrl+L steer</Text>
-    <Text><Text bold>Edit</Text>  Ctrl+W word · Ctrl+U to start · Ctrl+K to end · arrows/history</Text>
+    <Text><Text bold>Edit</Text>  Ctrl+W word · Ctrl+U to start · Ctrl+K to end · ↑ history</Text>
     <Text><Text bold>Open</Text>  Ctrl+P/? commands · Ctrl+S sessions · Ctrl+X keys</Text>
-    <Text><Text bold>Move</Text>  Tab focus · PgUp/PgDn page · Ctrl+U/D half page · Esc back/park</Text>
+    <Text><Text bold>Blocks</Text> Tab then ↑↓ select · ←/→ fold tool output and thoughts · Enter full</Text>
+    <Text><Text bold>Copy</Text>  Ctrl+Y copies the selected block · Shift+drag for the terminal's own selection</Text>
+    <Text><Text bold>Move</Text>  Tab focus · PgUp/PgDn page · Ctrl+U/D half page · wheel scrolls · Esc back/park</Text>
     <Text><Text bold>Policy</Text> Shift+Tab cycles only advertised dsh permission presets</Text>
     <Text><Text bold>Blockers</Text> approval y/n/3 · questions arrows/digits/Space/z/Enter</Text>
     <Text><Text bold>Stop</Text>  Ctrl+C cancel, clear draft, then confirm quit</Text>
@@ -121,7 +176,9 @@ function Panel({ overlay, editor, controller, runtime, store, theme, plain }: { 
 }
 
 function safeInline(value: unknown): string {
-  try { return JSON.stringify(value) ?? String(value) } catch { return '[unserializable]' }
+  return redactSecrets((() => {
+    try { return JSON.stringify(value) ?? String(value) } catch { return '[unserializable]' }
+  })())
 }
 
 function PanelFrame({ title, theme, children, plain }: { title: string; theme: Theme; children: React.ReactNode; plain: boolean }): React.JSX.Element {
@@ -164,17 +221,33 @@ function QuestionCard({ runtime, ui, focused, theme, plain }: { runtime: Runtime
   </Box>
 }
 
-function Composer({ editor, focused, runtime, theme, plain }: { editor: EditorState; focused: boolean; runtime: RuntimeSnapshot; theme: Theme; plain: boolean }): React.JSX.Element {
-  const parts = cursorParts(editor)
+function Composer({ editor, focused, runtime, theme, plain, lines, hardwareCaret }: {
+  editor: EditorState
+  focused: boolean
+  runtime: RuntimeSnapshot
+  theme: Theme
+  plain: boolean
+  lines: readonly EditorLine[]
+  /** True when the terminal's own cursor marks the caret, so a painted block would double it. */
+  hardwareCaret: boolean
+}): React.JSX.Element {
   const mode = runtime.agentStatus === 'running' ? 'FOLLOW-UP' : 'PROMPT'
+  const context = contextStatus(runtime)
   return <Box borderStyle={plain ? 'classic' : 'single'} borderColor={focused ? theme.primary : theme.border} minHeight={editor.multiline ? 6 : 4} paddingX={1} flexDirection="column">
-    <Text><Text bold color={theme.primary}>⌁ {mode}</Text><Text color={theme.muted}> · {editor.multiline ? 'multiline · Alt+Enter sends' : 'Enter sends · Ctrl+M multiline'}</Text></Text>
-    <Text color={theme.text}><Text color={theme.accent}>› </Text>{parts.before}<Text inverse={focused}>{parts.current}</Text>{parts.after}</Text>
+    <Box justifyContent="space-between">
+      <Text><Text bold color={theme.primary}>⌁ {mode}</Text>{!plain && <Text color={theme.muted}> · {editor.multiline ? 'multiline · Alt+Enter sends' : 'Enter sends · Ctrl+M multiline'}</Text>}</Text>
+      {context !== undefined && <Text bold color={theme.accent}>{context}</Text>}
+    </Box>
+    {lines.map((line, index) => <Text key={index} color={theme.text} wrap="truncate">
+      <Text color={theme.accent}>{index === 0 ? '› ' : '  '}</Text>
+      {line.before}{line.hasCursor ? <Text inverse={focused && !hardwareCaret}>{line.current}</Text> : null}{line.after}
+    </Text>)}
   </Box>
 }
 
 export function Shell(props: ShellProps): React.JSX.Element {
   const { exit } = useApp()
+  const { stdout } = useStdout()
   const { columns = 80, rows = 24 } = useWindowSize()
   const controller = props.controller
   const runtime = useSyncExternalStore(controller?.subscribe ?? noopSubscribe, controller?.getSnapshot ?? readOnlySnapshot, controller?.getSnapshot ?? readOnlySnapshot)
@@ -188,6 +261,14 @@ export function Shell(props: ShellProps): React.JSX.Element {
   const [focus, setFocus] = useState<'composer' | 'transcript'>('composer')
   const [scrollOffset, setScrollOffset] = useState(0)
   const [overlay, setOverlay] = useState<Overlay | undefined>()
+  const [expandedBlocks, setExpandedBlocks] = useState<ReadonlySet<string>>(() => new Set())
+  const [focusedBlockKey, setFocusedBlockKey] = useState<string | undefined>()
+  const [reasoningDetail, setReasoningDetail] = useState<{ key: string; offset: number; follow: boolean } | undefined>()
+  const [summaries, setSummaries] = useState<Record<string, SessionSummary>>({})
+  const [mouseTracking, setMouseTracking] = useState(true)
+  const catalogRequest = useRef(0)
+  const rowTotal = useRef(0)
+  const wheelBurst = useRef({ at: 0, count: 0, historyTimer: undefined as ReturnType<typeof setTimeout> | undefined })
   const [blockingFocused, setBlockingFocused] = useState(true)
   const [approvalOption, setApprovalOption] = useState(0)
   const [quitArmed, setQuitArmed] = useState(false)
@@ -196,9 +277,33 @@ export function Shell(props: ShellProps): React.JSX.Element {
   const veryNarrow = borderStyleForWidth(columns) === 'classic'
   const margin = veryNarrow ? 0 : compact ? 1 : 2
   const blockingRows = runtime.approval !== undefined || runtime.questions !== undefined ? 6 : 0
-  const overlayRows = overlay === undefined ? 0 : overlay.kind === 'keys' ? 10 : overlay.kind === 'session-info' ? 9 : 7
+  const overlayRows = overlay === undefined ? 0
+    : overlay.kind === 'keys' ? 12
+      : overlay.kind === 'sessions' ? SESSION_ROWS + 4
+        : overlay.kind === 'session-info' ? 9 : overlay.kind === 'models' ? 10 : overlay.kind === 'efforts' ? 8 : 7
   const composerRows = editor.multiline ? 6 : 4
-  const nodeBudget = Math.max(1, rows - (compact ? 6 : 13) - blockingRows - overlayRows - composerRows)
+  const viewportRows = Math.max(1, rows - (compact ? 6 : 13) - blockingRows - overlayRows - composerRows)
+  const transcriptWidth = Math.max(10, columns - margin * 2 - 4)
+  // The scrollbar column is always reserved, so crossing the viewport height
+  // never rewraps the transcript underneath the reader.
+  const rowWidth = Math.max(8, transcriptWidth - 2)
+  const blocks = useMemo(() => focusableBlocks(state), [state])
+  const thoughts = useMemo(() => blocks.filter(item => item.kind === 'reasoning'), [blocks])
+  const focusedBlock = blocks.find(item => item.key === focusedBlockKey)
+  const detailItem = reasoningDetail === undefined ? undefined : thoughts.find(item => item.key === reasoningDetail.key)
+  const transcript = useMemo(() => transcriptRows(state, {
+    width: rowWidth,
+    compact,
+    expandedBlocks,
+    focusedBlockKey: focus === 'transcript' ? focusedBlockKey : undefined,
+    thinkingGlyph: '◌',
+  }), [state, rowWidth, compact, expandedBlocks, focusedBlockKey, focus])
+  const maxScroll = Math.max(0, transcript.length - viewportRows)
+  const scroll = Math.min(Math.max(0, scrollOffset), maxScroll)
+  const composerWidth = Math.max(10, columns - margin * 2 - 4)
+  const editorLines = presentEditor(editor, Math.max(8, composerWidth), editor.multiline ? 5 : 3)
+  const composerFocused = focus === 'composer' && blockingFocused && overlay === undefined
+  const caret = composerFocused ? composerCaret({ rows, margin, lines: editorLines }) : undefined
 
   useEffect(() => {
     setBlockingFocused(true)
@@ -211,8 +316,73 @@ export function Shell(props: ShellProps): React.JSX.Element {
     }
   }, [runtime.questions?.id, questionUi.requestId])
 
+  useEffect(() => {
+    setExpandedBlocks(new Set())
+    setFocusedBlockKey(undefined)
+    setReasoningDetail(undefined)
+    setScrollOffset(0)
+  }, [runtime.sessionId])
+
+  // Streaming appends rows below the viewport. Growing the offset by the same
+  // amount keeps the reader parked on the text they were reading; at the bottom
+  // the view stays pinned to the newest row instead.
+  useEffect(() => {
+    const grew = transcript.length - rowTotal.current
+    rowTotal.current = transcript.length
+    if (grew > 0) setScrollOffset(value => value > 0 ? value + grew : 0)
+  }, [transcript.length])
+
+  useEffect(() => () => { clearTimeout(wheelBurst.current.historyTimer) }, [])
+
+  // An IME paints its pre-edit letters at the terminal's own cursor. Ink leaves
+  // that cursor parked at the end of the frame, which is why composition text
+  // appeared at the bottom of the screen. Park it on the composer caret instead,
+  // after the frame write: setImmediate lands once Ink's synchronous paint is done.
+  useEffect(() => {
+    const stream = props.stdout ?? stdout
+    if (stream === undefined || stream.isTTY !== true) return
+    const handle = setImmediate(() => {
+      stream.write(caret === undefined ? CURSOR_HIDE : `${moveCursorSequence(caret.row, caret.column)}${CURSOR_SHOW}`)
+    })
+    return () => { clearImmediate(handle) }
+  })
+
+  useEffect(() => {
+    if (controller === undefined || overlay?.kind !== 'sessions' || overlay.loading) return
+    const pending = visibleWindow(overlay.items, overlay.selected, SESSION_ROWS)
+      .map(({ item }) => item.id).filter(id => summaries[id] === undefined)
+    if (pending.length === 0) return
+    let cancelled = false
+    void (async () => {
+      for (const id of pending) {
+        const summary = await controller.describeSession(id).catch(() => ({ id, prompts: 0, unreadable: 'unavailable' } as SessionSummary))
+        if (cancelled) return
+        setSummaries(current => current[id] === undefined ? { ...current, [id]: summary } : current)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [controller, overlay, summaries])
+
+  useEffect(() => {
+    if (focusedBlockKey !== undefined && focusedBlock === undefined) setFocusedBlockKey(undefined)
+    if (reasoningDetail !== undefined && detailItem === undefined) setReasoningDetail(undefined)
+  }, [focusedBlock, focusedBlockKey, reasoningDetail, detailItem])
+
+  useEffect(() => {
+    if (reasoningDetail?.follow !== true || detailItem === undefined) return
+    const page = Math.max(1, viewportRows - 3)
+    const total = presentReasoning(detailItem.text, {
+      running: detailItem.running, width: Math.max(8, transcriptWidth - 4), mode: 'detail', offset: 0, rows: page,
+    }).totalRows
+    const offset = Math.max(0, total - page)
+    if (offset !== reasoningDetail.offset) setReasoningDetail({ ...reasoningDetail, offset })
+  }, [detailItem?.text, detailItem?.running, viewportRows, transcriptWidth, reasoningDetail])
+
   const openSessions = (): void => {
     if (controller === undefined) return
+    // The open session keeps appending events, so its folded summary is refetched.
+    const live = runtime.sessionId
+    if (live !== undefined) setSummaries(current => { const { [live]: _stale, ...rest } = current; return rest })
     setOverlay({ kind: 'sessions', selected: 0, loading: true, items: [] })
     void controller.listSessions().then(items => setOverlay(current => current?.kind === 'sessions' ? { ...current, loading: false, items } : current)).catch(error => {
       setOverlay(undefined)
@@ -231,14 +401,106 @@ export function Shell(props: ShellProps): React.JSX.Element {
     })
   }
 
+  const openModels = (): void => {
+    if (controller === undefined) return
+    const request = ++catalogRequest.current
+    setOverlay({ kind: 'models', selected: 0, loading: true, items: [] })
+    void controller.listModels().then(items => {
+      if (request !== catalogRequest.current) return
+      const selected = Math.max(0, items.findIndex(item => item.current))
+      setOverlay(current => current?.kind === 'models' ? { kind: 'models', selected, loading: false, items } : current)
+    }).catch(error => {
+      if (request !== catalogRequest.current) return
+      setOverlay(current => current?.kind === 'models'
+        ? { kind: 'models', selected: 0, loading: false, items: [], error: error instanceof Error ? error.message : String(error) }
+        : current)
+    })
+  }
+
+  const openEfforts = (): void => {
+    if (controller === undefined) return
+    const request = ++catalogRequest.current
+    setOverlay({ kind: 'efforts', selected: 0, loading: true, items: [] })
+    void controller.listEfforts().then(items => {
+      if (request !== catalogRequest.current) return
+      const selected = Math.max(0, items.findIndex(item => item.current))
+      setOverlay(current => current?.kind === 'efforts' ? { kind: 'efforts', selected, loading: false, items } : current)
+    }).catch(error => {
+      if (request !== catalogRequest.current) return
+      setOverlay(current => current?.kind === 'efforts'
+        ? { kind: 'efforts', selected: 0, loading: false, items: [], error: error instanceof Error ? error.message : String(error) }
+        : current)
+    })
+  }
+
+  const focusBlock = (item: TranscriptBlockRef | undefined): void => {
+    if (item === undefined) return
+    setFocusedBlockKey(item.key)
+    const row = transcript.findIndex(entry => entry.nodeId === item.nodeId)
+    if (row < 0) return
+    const window = viewportWindow(transcript.length, viewportRows, scroll)
+    if (row >= window.start && row < window.end) return
+    // Park the block two rows below the top edge rather than snapping it flush.
+    setScrollOffset(Math.max(0, Math.min(maxScroll, transcript.length - viewportRows - row + 2)))
+  }
+
+  const openThoughtDetail = (item: TranscriptBlockRef | undefined): void => {
+    if (item === undefined || item.kind !== 'reasoning') return
+    const page = Math.max(1, viewportRows - 3)
+    const total = presentReasoning(item.text, {
+      running: item.running, width: Math.max(8, transcriptWidth - 4), mode: 'detail', offset: 0, rows: page,
+    }).totalRows
+    setReasoningDetail({ key: item.key, offset: item.running ? Math.max(0, total - page) : 0, follow: item.running })
+  }
+
+  const expandBlock = (item: TranscriptBlockRef | undefined, open: boolean): void => {
+    if (item === undefined) return
+    setExpandedBlocks(current => {
+      const next = new Set(current)
+      open ? next.add(item.key) : next.delete(item.key)
+      return next
+    })
+  }
+
+  /** Copy the focused block, or the newest one when nothing is selected. */
+  const copyBlock = (item: TranscriptBlockRef | undefined): void => {
+    const target = item ?? blocks.at(-1)
+    if (target === undefined || target.text.trim() === '') {
+      controller?.notify('Nothing to copy: no tool output or reasoning block is selected')
+      return
+    }
+    void copyToClipboard(target.text, props.stdout === undefined ? {} : { stdout: props.stdout })
+      .then(result => controller?.notify(`${copyNotice(target.text, result)} · ${target.label}`))
+      .catch(() => controller?.notify('Clipboard copy failed'))
+  }
+
+  /**
+   * Mouse tracking is what stops a terminal from drag-selecting text. Shift+drag
+   * bypasses it in Windows Terminal and most emulators; where it does not, this
+   * hands the mouse back wholesale — at the cost of wheel scrolling.
+   */
+  const toggleMouse = (): void => {
+    const stream = props.stdout ?? stdout
+    const next = !mouseTracking
+    setMouseTracking(next)
+    stream?.write(next ? terminalSequences.ENTER_MOUSE : terminalSequences.LEAVE_MOUSE)
+    controller?.notify(next
+      ? 'Mouse tracking on · wheel scrolls · Shift+drag selects text'
+      : 'Mouse tracking off · drag selects text · keys still scroll · /mouse restores the wheel')
+  }
+
   const runChoice = (choice: CommandChoice): void => {
     if (controller === undefined) return
-    const line = editor.text.startsWith('/') ? editor.text : `/${choice.name}`
+    const suffix = editor.text.startsWith('/') ? /^\/[^\s]*([\s\S]*)$/u.exec(editor.text)?.[1] ?? '' : ''
+    const line = `/${choice.name}${suffix}`
     setOverlay(undefined)
     setEditor(EMPTY_EDITOR)
     void controller.executeCommand(line, choice.source).then(action => {
       if (action === 'quit') exit()
+      else if (action === 'mouse') toggleMouse()
       else if (action === 'workflows') openWorkflows()
+      else if (action === 'models') openModels()
+      else if (action === 'efforts') openEfforts()
       else if (action === 'help' || action === 'keys' || action === 'session-info' || action === 'confirm-danger' || action === 'confirm-new') setOverlay({ kind: action })
       else if (action === 'sessions') openSessions()
     })
@@ -257,6 +519,8 @@ export function Shell(props: ShellProps): React.JSX.Element {
     setEditor(EMPTY_EDITOR)
     setOverlay(undefined)
     setScrollOffset(0)
+    clearTimeout(wheelBurst.current.historyTimer)
+    wheelBurst.current.historyTimer = undefined
   }
 
   const answerCurrentQuestion = (direct?: number, finalizeOnly = false): void => {
@@ -290,8 +554,96 @@ export function Shell(props: ShellProps): React.JSX.Element {
     } else setQuestionUi({ ...questionUi, selections })
   }
 
+  const scrollTranscript = (direction: 'up' | 'down', amount = 1): void => {
+    const step = Math.max(1, amount)
+    if (reasoningDetail !== undefined && detailItem !== undefined) {
+      const page = Math.max(1, viewportRows - 3)
+      const total = presentReasoning(detailItem.text, {
+        running: detailItem.running, width: Math.max(8, transcriptWidth - 4), mode: 'detail', offset: 0, rows: page,
+      }).totalRows
+      if (direction === 'up') setReasoningDetail({ ...reasoningDetail, offset: Math.max(0, reasoningDetail.offset - step), follow: false })
+      else {
+        const next = Math.min(Math.max(0, total - page), reasoningDetail.offset + step)
+        setReasoningDetail({ ...reasoningDetail, offset: next, follow: next >= Math.max(0, total - page) && detailItem.running })
+      }
+      return
+    }
+    setScrollOffset(value => {
+      const current = Math.min(Math.max(0, value), maxScroll)
+      return direction === 'up' ? Math.min(maxScroll, current + step) : Math.max(0, current - step)
+    })
+  }
+
+  const recallHistory = (direction: 'up' | 'down'): void => {
+    if (direction === 'up' && history.length > 0) {
+      const next = Math.min(history.length - 1, historyIndex + 1)
+      setHistoryIndex(next)
+      const text = history[history.length - 1 - next]!
+      setEditor({ ...EMPTY_EDITOR, text, cursor: graphemes(text).length })
+      return
+    }
+    if (direction === 'down' && historyIndex >= 0) {
+      const next = historyIndex - 1
+      setHistoryIndex(next)
+      const text = next < 0 ? '' : history[history.length - 1 - next]!
+      setEditor({ ...EMPTY_EDITOR, text, cursor: graphemes(text).length })
+    }
+  }
+
+  const handleVerticalNav = (direction: 'up' | 'down', fromWheel: boolean, amount = 1): void => {
+    clearTimeout(wheelBurst.current.historyTimer)
+    wheelBurst.current.historyTimer = undefined
+    if (fromWheel) {
+      scrollTranscript(direction, amount)
+      return
+    }
+    if (editor.text !== '' || history.length === 0) {
+      scrollTranscript(direction, amount)
+      return
+    }
+    const now = Date.now()
+    if (now - wheelBurst.current.at < 80) {
+      // A terminal that translates the wheel into arrow keys arrives as a burst;
+      // treat it like a wheel notch instead of one-row keyboard navigation.
+      wheelBurst.current.count += 1
+      wheelBurst.current.at = now
+      scrollTranscript(direction, WHEEL_ROWS)
+      return
+    }
+    wheelBurst.current.at = now
+    wheelBurst.current.count = 1
+    wheelBurst.current.historyTimer = setTimeout(() => {
+      wheelBurst.current.historyTimer = undefined
+      if (wheelBurst.current.count > 1) return
+      recallHistory(direction)
+    }, 70)
+  }
+
+  /** How many rows the open overlay offers, mirroring each branch's own bounds. */
+  const overlayLength = (): number => {
+    if (overlay === undefined) return 0
+    if (overlay.kind === 'commands') return matchingCommands(controller?.commandChoices() ?? [], editor.text).length
+    if (overlay.kind === 'sessions') return overlay.items.length
+    if (overlay.kind === 'models' || overlay.kind === 'efforts') return overlay.loading ? 0 : overlay.items.length
+    if (overlay.kind === 'permissions') return (controller?.permissionNames() ?? []).length
+    return 0
+  }
+
   useInput((input, key) => {
     if (key.eventType === 'release') return
+    const wheel = parseWheelBurst(input)
+    if (wheel.notches !== 0) {
+      // Over an open picker the wheel walks that list; otherwise it scrolls the transcript.
+      const listed = overlayLength()
+      if (listed > 0) {
+        setOverlay(current => current === undefined || !('selected' in current) ? current
+          : { ...current, selected: Math.max(0, Math.min(listed - 1, current.selected + wheel.notches)) })
+        return
+      }
+      handleVerticalNav(wheel.notches < 0 ? 'up' : 'down', true, Math.abs(wheel.notches) * WHEEL_ROWS)
+      return
+    }
+    if (wheel.mouse) return
     if (quitArmed && !(key.ctrl && input === 'c')) setQuitArmed(false)
 
     if (runtime.approval !== undefined && blockingFocused && overlay === undefined) {
@@ -350,6 +702,24 @@ export function Shell(props: ShellProps): React.JSX.Element {
           const id = overlay.items[overlay.selected]!.id
           setOverlay(undefined); setEditor(EMPTY_EDITOR); void controller?.switchSession(id)
         }
+      } else if (overlay.kind === 'models') {
+        if (key.escape) setOverlay(undefined)
+        else if (!overlay.loading && key.upArrow) setOverlay({ ...overlay, selected: Math.max(0, overlay.selected - 1) })
+        else if (!overlay.loading && (key.downArrow || key.tab)) setOverlay({ ...overlay, selected: Math.min(Math.max(0, overlay.items.length - 1), overlay.selected + 1) })
+        else if (!overlay.loading && key.return && overlay.items[overlay.selected] !== undefined) {
+          const model = overlay.items[overlay.selected]!
+          setOverlay(undefined)
+          void controller?.switchModel(model.provider, model.id)
+        }
+      } else if (overlay.kind === 'efforts') {
+        if (key.escape) setOverlay(undefined)
+        else if (!overlay.loading && key.upArrow) setOverlay({ ...overlay, selected: Math.max(0, overlay.selected - 1) })
+        else if (!overlay.loading && (key.downArrow || key.tab)) setOverlay({ ...overlay, selected: Math.min(Math.max(0, overlay.items.length - 1), overlay.selected + 1) })
+        else if (!overlay.loading && key.return && overlay.items[overlay.selected] !== undefined) {
+          const effort = overlay.items[overlay.selected]!
+          setOverlay(undefined)
+          void controller?.switchEffort(effort.id)
+        }
       } else if (overlay.kind === 'permissions') {
         const names = controller?.permissionNames() ?? []
         if (key.escape) setOverlay(undefined)
@@ -369,13 +739,33 @@ export function Shell(props: ShellProps): React.JSX.Element {
       return
     }
 
+    if (key.ctrl && input === 'y') { copyBlock(focusedBlock); return }
+    if (key.ctrl && input === 'e') {
+      if (compact && thoughts.length > 0 && focusedBlock?.kind !== 'tool') {
+        if (reasoningDetail !== undefined) { setReasoningDetail(undefined); return }
+        const item = thoughts.find(thought => thought.key === focusedBlockKey) ?? thoughts.at(-1)
+        focusBlock(item)
+        openThoughtDetail(item)
+        setFocus('transcript')
+        return
+      }
+      const keys = blocks.map(item => item.key)
+      const allExpanded = keys.length > 0 && keys.every(item => expandedBlocks.has(item))
+      setExpandedBlocks(allExpanded ? new Set() : new Set(keys))
+      return
+    }
     if (key.ctrl && input === 'p' || input === '?' && editor.text === '') { setEditor({ ...EMPTY_EDITOR, text: '/', cursor: 1 }); setOverlay({ kind: 'commands', selected: 0 }); return }
     if (key.ctrl && input === 's') { openSessions(); return }
     if (key.ctrl && input === 'x') { setOverlay({ kind: 'keys' }); return }
     if (key.shift && key.tab) { controller?.cyclePermission(); return }
     if (key.tab) {
       if (!blockingFocused && (runtime.approval !== undefined || runtime.questions !== undefined)) setBlockingFocused(true)
-      else setFocus(value => value === 'composer' ? 'transcript' : 'composer')
+      else {
+        const next = focus === 'composer' ? 'transcript' : 'composer'
+        if (next === 'transcript' && focusedBlockKey === undefined) focusBlock(blocks.at(-1))
+        if (next === 'composer') setReasoningDetail(undefined)
+        setFocus(next)
+      }
       return
     }
     if (key.ctrl && input === 'c') {
@@ -386,9 +776,37 @@ export function Shell(props: ShellProps): React.JSX.Element {
       return
     }
     if (focus === 'transcript') {
-      if (key.pageUp || key.upArrow || key.ctrl && input === 'u') setScrollOffset(value => Math.min(Math.max(0, state.nodes.length - 1), value + nodeBudget))
-      else if (key.pageDown || key.downArrow || key.ctrl && input === 'd') setScrollOffset(value => Math.max(0, value - nodeBudget))
+      if (key.ctrl && input === 'm') { openModels(); return }
+      if (reasoningDetail !== undefined && detailItem !== undefined) {
+        const page = Math.max(1, viewportRows - 3)
+        const total = presentReasoning(detailItem.text, { running: detailItem.running, width: Math.max(8, transcriptWidth - 4), mode: 'detail', offset: 0, rows: page }).totalRows
+        if (key.pageUp || key.upArrow || key.ctrl && input === 'u') setReasoningDetail({ ...reasoningDetail, offset: Math.max(0, reasoningDetail.offset - page), follow: false })
+        else if (key.pageDown || key.downArrow || key.ctrl && input === 'd') {
+          const next = Math.min(Math.max(0, total - page), reasoningDetail.offset + page)
+          setReasoningDetail({ ...reasoningDetail, offset: next, follow: next >= Math.max(0, total - page) && detailItem.running })
+        }
+        else if (key.escape || key.leftArrow || key.return) setReasoningDetail(undefined)
+        return
+      }
+      if (key.pageUp) scrollTranscript('up', Math.max(1, viewportRows - 1))
+      else if (key.pageDown) scrollTranscript('down', Math.max(1, viewportRows - 1))
+      else if (key.ctrl && input === 'u') scrollTranscript('up', Math.max(1, Math.floor(viewportRows / 2)))
+      else if (key.ctrl && input === 'd') scrollTranscript('down', Math.max(1, Math.floor(viewportRows / 2)))
+      else if ((key.upArrow || key.downArrow) && blocks.length === 0) scrollTranscript(key.upArrow ? 'up' : 'down')
+      else if (key.upArrow || key.downArrow) {
+        const current = Math.max(0, blocks.findIndex(item => item.key === focusedBlockKey))
+        const next = key.upArrow ? Math.max(0, current - 1) : Math.min(blocks.length - 1, current + 1)
+        focusBlock(blocks[next])
+      } else if (key.leftArrow && focusedBlock !== undefined) expandBlock(focusedBlock, false)
+      else if (key.rightArrow && focusedBlock !== undefined) {
+        if (compact && focusedBlock.kind === 'reasoning') openThoughtDetail(focusedBlock)
+        else expandBlock(focusedBlock, true)
+      } else if (key.return && focusedBlock !== undefined) {
+        if (focusedBlock.kind === 'reasoning') openThoughtDetail(focusedBlock)
+        else expandBlock(focusedBlock, !expandedBlocks.has(focusedBlock.key))
+      }
       else if (key.end) setScrollOffset(0)
+      else if (key.home) setScrollOffset(maxScroll)
       else if (key.escape) setFocus('composer')
       return
     }
@@ -397,19 +815,18 @@ export function Shell(props: ShellProps): React.JSX.Element {
     if (key.ctrl && input === 'w') { setEditor(value => deleteWord(value)); return }
     if (key.ctrl && input === 'u') { setEditor(value => deleteToStart(value)); return }
     if (key.ctrl && input === 'k') { setEditor(value => deleteToEnd(value)); return }
+    // Paging the transcript never requires leaving the composer, exactly like the wheel.
+    if (key.pageUp) { scrollTranscript('up', Math.max(1, viewportRows - 1)); return }
+    if (key.pageDown) { scrollTranscript('down', Math.max(1, viewportRows - 1)); return }
     if (key.leftArrow) setEditor(value => moveCursor(value, -1))
     else if (key.rightArrow) setEditor(value => moveCursor(value, 1))
     else if (key.home) setEditor(value => moveCursorTo(value, 'start'))
     else if (key.end) setEditor(value => moveCursorTo(value, 'end'))
     else if (key.backspace) setEditor(value => backspace(value))
     else if (key.delete) setEditor(value => deleteForward(value))
-    else if (key.upArrow && editor.text === '' && history.length > 0) {
-      const next = Math.min(history.length - 1, historyIndex + 1); setHistoryIndex(next)
-      const text = history[history.length - 1 - next]!; setEditor({ ...EMPTY_EDITOR, text, cursor: graphemes(text).length })
-    } else if (key.downArrow && editor.text === '' && historyIndex >= 0) {
-      const next = historyIndex - 1; setHistoryIndex(next)
-      const text = next < 0 ? '' : history[history.length - 1 - next]!; setEditor({ ...EMPTY_EDITOR, text, cursor: graphemes(text).length })
-    } else if (key.return) {
+    else if ((key.upArrow || key.downArrow) && key.ctrl) recallHistory(key.upArrow ? 'up' : 'down')
+    else if (key.upArrow || key.downArrow) handleVerticalNav(key.upArrow ? 'up' : 'down', false)
+    else if (key.return) {
       if (editor.multiline && !key.meta) setEditor(value => insertText(value, '\n'))
       else submitPrompt(false)
     } else if (!key.ctrl && !key.meta && input !== '') {
@@ -420,18 +837,26 @@ export function Shell(props: ShellProps): React.JSX.Element {
   })
 
   const title = sessionTitle(runtime) ?? runtime.sessionId ?? props.sessionId ?? props.resume ?? 'new session'
-  const facts = statusSegments(runtime, !veryNarrow).join(' · ')
-  const signal = runtime.error ?? runtime.notice
-  const statusLine = middleEllipsis(signal === undefined ? facts : `${signal} │ ${facts}`, Math.max(1, columns - margin * 2))
+  const transcriptHeading = detailItem === undefined ? 'TRANSCRIPT' : 'THOUGHT DETAIL'
+  // One clipped string: a wrapped heading would steal a transcript row and clip the newest line.
+  const transcriptFacts = takeCells(
+    `  seq ${state.lastSeq < 0 ? '—' : state.lastSeq}`
+    + `${state.gap === undefined ? '' : ` · resnapshot ${state.gap.expected}→${state.gap.received}`}`
+    + `${detailItem !== undefined ? '' : scroll > 0 ? ` · ↑ ${scroll} rows · End latest` : ' · live'}`,
+    Math.max(0, transcriptWidth - 2 - displayWidth(transcriptHeading)),
+  ).head
+  const statusLine = formatFooter(runtime, runtime.error ?? runtime.notice, Math.max(1, columns - margin * 2), !veryNarrow)
   const help = runtime.approval !== undefined
     ? 'y allow · n reject · Esc park'
     : runtime.questions !== undefined
       ? 'arrows choose · Enter answer · Esc park'
       : overlay !== undefined
         ? '↑↓ choose · Enter open · Esc close'
-        : focus === 'transcript'
-          ? 'PgUp/PgDn scroll · Tab compose · Ctrl+X keys'
-          : 'Enter send · Ctrl+P commands · Ctrl+X keys'
+        : reasoningDetail !== undefined
+          ? 'PgUp/PgDn thought · Enter/Esc close · Ctrl+E all'
+          : focus === 'transcript'
+            ? '↑↓ block · ←→ fold · Ctrl+Y copy · End latest'
+            : 'Enter send · Ctrl+P commands · Ctrl+Y copy last block'
   const helpLine = middleEllipsis(quitArmed ? 'Ctrl+C again to quit' : compact ? help : `${help} · Ctrl+S sessions · Shift+Tab permissions`, Math.max(1, columns - margin * 2))
 
   return (
@@ -441,22 +866,24 @@ export function Shell(props: ShellProps): React.JSX.Element {
         <Box marginLeft={!compact && rows >= 28 && state.nodes.length === 0 ? 3 : 0} flexDirection="column">
           <Text bold color={theme.text}>{compact ? `dsh-tui · ${middleEllipsis(title, Math.max(8, columns - margin * 2 - 10))}` : 'DEEPSEEK / HARNESS'}</Text>
           {!compact && <Text color={theme.accent}>Abyss Workbench · {theme.name}</Text>}
-          {!compact && <Text color={theme.muted}>{middleEllipsis(`M4 complete · ${title}`, Math.max(8, columns - 40))}</Text>}
+          {!compact && <Text color={theme.muted}>{middleEllipsis(`Harness-native model + reasoning controls · ${title}`, Math.max(8, columns - 40))}</Text>}
         </Box>
       </Box>
 
       <Box marginX={margin} marginTop={compact ? 0 : 1} borderStyle={veryNarrow ? 'classic' : 'single'} borderColor={focus === 'transcript' ? theme.primary : theme.border} flexDirection="column" flexGrow={1} paddingX={1} overflow="hidden">
-        <Box><Text color={theme.primary}>◆ </Text><Text bold color={theme.text}>TRANSCRIPT</Text><Text color={theme.muted}>  seq {state.lastSeq < 0 ? '—' : state.lastSeq}{state.gap === undefined ? '' : ` · resnapshot ${state.gap.expected}→${state.gap.received}`}</Text></Box>
-        <Box marginTop={compact ? 0 : 1} flexDirection="column" overflow="hidden">
-          <TranscriptView state={state} width={Math.max(10, columns - margin * 2 - 4)} nodeBudget={nodeBudget} offset={Math.max(0, scrollOffset)} theme={theme} compact={compact} />
+        <Box><Text color={theme.primary}>{detailItem === undefined ? '◆ ' : '◇ '}</Text><Text bold color={theme.text}>{transcriptHeading}</Text><Text color={theme.muted}>{transcriptFacts}</Text></Box>
+        <Box marginTop={compact ? 0 : 1} flexDirection="column" flexGrow={1} justifyContent="flex-end" overflow="hidden">
+          {detailItem === undefined
+            ? <TranscriptView rows={transcript} viewport={viewportRows} offset={scroll} theme={theme} plain={veryNarrow} />
+            : <ReasoningDetailView item={detailItem} width={transcriptWidth} rows={viewportRows} offset={reasoningDetail?.offset ?? 0} theme={theme} />}
         </Box>
       </Box>
 
       <Box marginX={margin} flexDirection="column" flexShrink={0}>
         <ApprovalCard runtime={runtime} focused={blockingFocused} theme={theme} plain={veryNarrow} />
         <QuestionCard runtime={runtime} ui={questionUi} focused={blockingFocused} theme={theme} plain={veryNarrow} />
-        {overlay !== undefined && <Panel overlay={overlay} editor={editor} controller={controller} runtime={runtime} store={store} theme={theme} plain={veryNarrow} />}
-        <Composer editor={editor} focused={focus === 'composer' && blockingFocused} runtime={runtime} theme={theme} plain={veryNarrow} />
+        {overlay !== undefined && <Panel overlay={overlay} editor={editor} controller={controller} runtime={runtime} store={store} theme={theme} plain={veryNarrow} width={Math.max(10, columns - margin * 2)} summaries={summaries} />}
+        <Composer editor={editor} focused={focus === 'composer' && blockingFocused} runtime={runtime} theme={theme} plain={veryNarrow} lines={editorLines} hardwareCaret={caret !== undefined} />
       </Box>
 
       <Box paddingX={margin} flexDirection="column" flexShrink={0}>

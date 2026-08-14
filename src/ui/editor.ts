@@ -1,4 +1,4 @@
-import { graphemes } from './display-width.js'
+import { displayWidth, graphemes } from './display-width.js'
 
 export interface EditorState {
   readonly text: string
@@ -62,4 +62,67 @@ export function cursorParts(state: EditorState): { before: string; current: stri
     current: units[state.cursor] ?? ' ',
     after: units.slice(state.cursor + (state.cursor < units.length ? 1 : 0)).join(''),
   }
+}
+
+export interface EditorLine {
+  readonly before: string
+  readonly current: string
+  readonly after: string
+  readonly hasCursor: boolean
+}
+
+/** Wrap by terminal display cells so the inverse cursor stays on the typed grapheme. */
+export function presentEditor(state: EditorState, width: number, maxRows = 3): readonly EditorLine[] {
+  const cells = Math.max(1, width - 2)
+  const units = graphemes(state.text)
+  const rows: string[] = []
+  const starts: number[] = [0]
+  let line = ''
+  let lineWidth = 0
+  for (let index = 0; index < units.length; index += 1) {
+    const unit = units[index]!
+    if (state.multiline && unit === '\n') {
+      rows.push(line)
+      line = ''
+      lineWidth = 0
+      starts.push(index + 1)
+      continue
+    }
+    const unitWidth = Math.max(1, displayWidth(unit))
+    if (line !== '' && lineWidth + unitWidth > cells) {
+      rows.push(line)
+      line = unit
+      lineWidth = unitWidth
+      starts.push(index)
+    } else {
+      line += unit
+      lineWidth += unitWidth
+    }
+  }
+  rows.push(line)
+
+  let cursorRow = 0
+  for (let index = 1; index < starts.length; index += 1) {
+    if (state.cursor >= starts[index]!) cursorRow = index
+    else break
+  }
+  const window = Math.max(1, maxRows)
+  const from = Math.max(0, Math.min(cursorRow - window + 1, Math.max(0, rows.length - window)))
+  const visible: EditorLine[] = []
+  for (let row = from; row < Math.min(rows.length, from + window); row += 1) {
+    const start = starts[row]!
+    const lineUnits = graphemes(rows[row]!)
+    if (row !== cursorRow) {
+      visible.push({ before: lineUnits.join(''), current: '', after: '', hasCursor: false })
+      continue
+    }
+    const offset = Math.max(0, Math.min(lineUnits.length, state.cursor - start))
+    visible.push({
+      before: lineUnits.slice(0, offset).join(''),
+      current: lineUnits[offset] ?? ' ',
+      after: lineUnits.slice(offset + (offset < lineUnits.length ? 1 : 0)).join(''),
+      hasCursor: true,
+    })
+  }
+  return visible
 }

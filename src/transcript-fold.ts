@@ -12,7 +12,7 @@ export type ToolStatus = 'running' | 'success' | 'error' | 'cancelled' | 'orphan
 
 export type TranscriptBlock =
   | { readonly type: 'text'; readonly text: string }
-  | { readonly type: 'reasoning'; readonly text: string }
+  | { readonly type: 'reasoning'; readonly text: string; readonly streaming?: true }
   | { readonly type: 'tool-call'; readonly id: string; readonly name: string; readonly arguments: string }
   | { readonly type: 'image'; readonly label: string }
   | { readonly type: 'raw'; readonly blockType: string; readonly value: unknown }
@@ -251,7 +251,7 @@ function foldChunk(state: TranscriptState, event: EventLike): TranscriptState {
     case 'block-start':
       if (index >= 0) {
         const type = string(chunk.blockType)
-        blocks[index] = type === 'reasoning' ? { type: 'reasoning', text: '' }
+        blocks[index] = type === 'reasoning' ? { type: 'reasoning', text: '', streaming: true }
           : type === 'tool-call' ? { type: 'tool-call', id: '', name: '', arguments: '' }
             : type === 'text' ? { type: 'text', text: '' }
               : { type: 'raw', blockType: type, value: null }
@@ -262,7 +262,9 @@ function foldChunk(state: TranscriptState, event: EventLike): TranscriptState {
       if (index >= 0) {
         const type = chunk.type === 'text-delta' ? 'text' : 'reasoning'
         const current = blocks[index]
-        blocks[index] = current?.type === type ? { type, text: current.text + string(chunk.text) } : { type, text: string(chunk.text) }
+        blocks[index] = current?.type === type
+          ? { type, text: current.text + string(chunk.text), ...(type === 'reasoning' ? { streaming: true as const } : {}) }
+          : { type, text: string(chunk.text), ...(type === 'reasoning' ? { streaming: true as const } : {}) }
       }
       break
     case 'tool-call-delta':

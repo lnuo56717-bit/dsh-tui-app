@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { cursorCell } from '../../src/ui/display-width.js'
 import {
   EMPTY_EDITOR, backspace, cursorParts, deleteForward, deleteToEnd, deleteToStart, deleteWord,
-  insertText, moveCursor,
+  insertText, moveCursor, presentEditor,
 } from '../../src/ui/editor.js'
 
 describe('M3 grapheme composer', () => {
@@ -24,5 +24,16 @@ describe('M3 grapheme composer', () => {
     const middle = moveCursor(initial, -5)
     expect(deleteToStart(middle)).toMatchObject({ text: ' beta', cursor: 0 })
     expect(deleteToEnd(middle).text).toBe('alpha 中文')
+  })
+
+  it('wraps the composer by display cells and keeps the cursor on the current CJK grapheme', () => {
+    const state = insertText(EMPTY_EDITOR, '中文路径测试🐋')
+    const lines = presentEditor({ ...state, cursor: 2 }, 10)
+    expect(lines[0]).toMatchObject({ before: '中文', current: '路', hasCursor: true })
+    expect(lines.some(line => line.after.includes('测') || line.before.includes('测') || line.current === '测')).toBe(true)
+    for (const line of lines) {
+      const painted = `${line.before}${line.current}${line.after}`
+      expect(cursorCell(painted, 99) <= 8 || painted.length === 0).toBe(true)
+    }
   })
 })

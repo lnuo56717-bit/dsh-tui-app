@@ -39,7 +39,7 @@ At 120×40 the layout is one continuous work surface with a fixed one-line heade
 │  ├─ pwsh  pnpm test                                        running …    │
 │  └─ edit  src/auth.ts                                      +8  -3       │
 │                                                                          │
-│  reasoning  [collapsed · 24 lines]                                      │
+│  ◇ Thought · stable first line · 24 lines                               │
 │                                                                          │
 │  ┌ Permission required ───────────────────────────────────────────────┐  │
 │  │ pwsh · pnpm test                                                  │  │
@@ -64,11 +64,14 @@ There is no permanent left sidebar. `Ctrl+S` opens a modal session picker and cl
 - User messages use a blue left marker and normal foreground text; no filled chat bubble.
 - Assistant text is the default foreground. Markdown headings gain weight, code gains a one-cell gutter, and tables degrade to wrapped key/value blocks when they would overflow.
 - Reasoning is collapsed by default with a dim cyan label; expanding it never changes event order.
+- A streaming reasoning row shows a Grok-style truncated tail (latest summary plus the last three wrapped lines). A settled row returns to its stable first non-empty line. Right opens a bounded three-line preview, Enter opens independently scrollable full detail, and `Ctrl+E` toggles every preview. Duration labels are omitted unless Harness emits real timestamps.
 - Tool calls are a tree. Running is cyan with a spinner, success is foam/green, errors and rejections are coral, and raw/orphan data is amber. Tool names stay visible at every width.
+- Tool output is preformatted, never re-flowed as Markdown prose: file content keeps its own line breaks and indentation. It folds to a six-line preview (one line at 80 columns and below) whose header states the real row count, so a large file read cannot bury the conversation. `→` expands, `←` collapses, `Ctrl+E` toggles every block, and an expanded body is capped so one pathological result cannot stall the row builder. Folding is view state: the copied text is always the tool's own output.
 - Diffs use `+`/`-` prefixes in addition to color. No meaning relies on color alone.
 - Unknown events render as `raw event #<seq> · <type>` with an expandable JSON body. They never appear as assistant prose.
 - Streaming updates mutate the current assistant node in place. Final `assistant/message` does not visually duplicate the partial.
 - Approval and question cards take keyboard priority, then composer, then scrollback. `Esc` parks a blocking card in scrollback; it never fabricates an answer.
+- The scrollback viewport is a window over rendered rows, never over nodes: a scroll step of one row moves the window by exactly one terminal line regardless of the node it lands inside, and a tall answer is entered gradually instead of appearing whole. A one-cell scrollbar column is permanently reserved on the right so crossing the viewport height never rewraps text, and it draws a proportional thumb only while the transcript overflows. New rows that arrive while the reader is scrolled up shift the offset by the same amount, so streaming never drags the view; at rest the newest row stays pinned to the bottom edge.
 
 ## 4. Keyboard map
 
@@ -79,17 +82,22 @@ The default is Grok's Simple-mode vocabulary; v1 does not implement Vim mode. Re
 | Key | Action | dsh mapping |
 |---|---|---|
 | `Ctrl+P` or `?` | open fuzzy command palette | dsh command descriptors + local commands |
-| `Ctrl+S` | open persisted session picker | `sessionPersistence.list/inspect`, then `agents.resume` |
+| `Ctrl+S` | open persisted session picker | `sessionPersistence.list`, lazy `readFrom` per visible row, then `agents.resume` |
 | `Ctrl+X` | open key reference | local overlay; chosen because Windows Terminal does not reliably distinguish control punctuation |
 | `Ctrl+C` | cancel active turn; when idle with a draft, clear draft; when idle/empty, request quit on second press | `agent.cancel` or local state; double action is shown before execution |
-| `Ctrl+M` | prompt focused: toggle multiline; scrollback focused: model picker | local composer / `agentDefaultModel` |
+| `Ctrl+M` | prompt focused: toggle multiline; scrollback focused: live model picker | local composer / `llm` catalog + Agent `ModelSelectionRef` |
+| `Ctrl+E` | expand/collapse every tool output and reasoning preview | local presentation over dsh blocks |
+| `Ctrl+Y` | copy the selected block, else the newest, to the clipboard | OSC 52 plus the platform clipboard tool |
 | `Shift+Tab` | cycle the advertised permission presets | `permissionPresets.names/current/set`; never cycles invented Grok modes |
 | `Tab` | move composer ↔ scrollback, or walk the active blocking card | local focus state |
 | `Esc` | close top non-blocking overlay; park a blocking card; return focus | local only; no rejection/cancellation |
-| `PgUp` / `PgDn` | page scroll | transcript viewport |
+| `PgUp` / `PgDn` | page the row viewport, from either focus | transcript viewport |
 | `Ctrl+U` / `Ctrl+D` | half-page up/down while scrollback is focused | transcript viewport |
-| `Up` / `Down` | previous/next visual block in scrollback; prompt history when composer is focused and empty | local viewport/history |
+| `Home` / `End` in scrollback | oldest row / live tail | transcript viewport |
+| Wheel | three rows per notch; walks an open picker instead when one is open | SGR mouse reports, alternate scroll disabled |
+| `Up` / `Down` | previous/next selectable block (tool output or reasoning) in scrollback, or one row when the session has none; prompt history when composer is focused and empty | local viewport/history |
 | `Left` / `Right` | collapse/expand focused block | local presentation only |
+| `Shift`+drag | the terminal's own selection; `/mouse` releases mouse tracking entirely | terminal-owned, no app involvement |
 | `Enter` on focused block | open full detail | local detail overlay |
 
 ### Composer and active turn
@@ -147,7 +155,10 @@ Typing `/` opens a fuzzy menu combining `ctx.commands.list(agent)` with local TU
 | `/new` | local | confirm if a turn/draft is active, dispose current handle, create fresh root |
 | `/resume` | local | open session picker |
 | `/session-info` | local | title/id/cwd/model/preset/projection facts; no invented billing |
-| `/model` | local | select and save next-session default; clearly labels that the live agent is unchanged |
+| `/switch [provider/model]` | local | exact-route validation through `llm.resolveCallConfig`; changes the active Agent on its next not-yet-assembled step and best-effort saves the default |
+| `/effort [default\|level]` | local | only offers effort ids from the exact model metadata; `default` clears the explicit override |
+| `/model` | local | compatibility alias for `/switch` |
+| `/mouse` | local | toggle mouse tracking so an emulator without `Shift`+drag can drag-select; the wheel stops scrolling while it is off |
 | `/rename` | local | `sessionTitle.rename` |
 | `/plan [on\|off]` | adopt if dsh descriptor is present, otherwise mapped local action | `planMode.set`; status reflects committed vs queued |
 | `/always-approve` | compatibility alias | selects `danger-full-access` only after showing that it changes both sandbox and approval policy; running it again does not invent a Grok toggle |
@@ -182,6 +193,8 @@ The app selects an explicit token set for truecolor, 256, 16, or mono. It does n
 - Combining marks stay attached to their grapheme; full-width punctuation and CJK count as two cells; ANSI sequences count as zero.
 - Wrapping happens at grapheme boundaries. A two-cell glyph is moved whole to the next line when only one cell remains.
 - Input selection/cursor state stores grapheme boundaries and derives the terminal column from the prefix width.
+- An input method composes at the terminal's own cursor, not at whatever the app paints, so the hardware cursor is moved onto the composer caret after every frame and made visible while the composer holds focus. The painted inverse-video caret is dropped exactly then, so a block cursor cannot sit on top of it. Anywhere else — transcript focus, an overlay, a blocking card — the cursor is hidden again.
+- Copy paths never transcode: the clipboard receives the block's source text, UTF-16LE with a BOM on Windows (`clip.exe`) and UTF-8 elsewhere, plus a base64 OSC 52 payload for terminals that own the clipboard themselves.
 - The acceptance fixture is `中文 CJK，ＡＢ。` plus combining and emoji cases. The M0 baseline measures the first string as 16 cells and wraps it 8+8 without half-glyph clipping.
 - ASCII whale/logo characters are all one-cell ASCII. Box-drawing borders have a plain ASCII fallback for terminals whose width probe disagrees.
 - Screen reader mode is not claimed in v1, but status text does not depend on spinners or color alone.
@@ -190,7 +203,9 @@ Windows Terminal is the supported Windows emulator; legacy conhost receives a wa
 
 ## 8. Session picker and P1 panels
 
-The session picker lists title (or shortened id), cwd, creation/update fact when available, and current-session marker. It uses metadata listing first and loads details lazily. `Enter` resumes, `Esc` returns, and `/new` creates a new session. It does not search transcript content in v1 and never deletes sessions.
+The session picker lists conversations, not storage keys. Each row is the durable `session/title`; when a log carries none it is the first human prompt; when it carries neither the row says `untitled` and falls back to the id. The right column carries the current-session marker, the human prompt count, and the age of the last stored event. The full session id, cwd, and creation time appear on one detail line under the list, for the selected row only.
+
+It uses `sessionPersistence.list` metadata first and folds details lazily: only the rows in the visible window are read, one at a time, through the read-only `readFrom(id, 0)` seam (`inspect` when a backend has no `readFrom`), so opening the picker never publishes, repairs, or resumes a session. A row whose log cannot be read says `unreadable log` and keeps its id — the picker never fabricates a title. The open session's fold is discarded each time the picker opens because its log keeps growing. Rows stay ordered by `createdAt`: ordering by folded activity would require reading every stored log. `Enter` resumes, `Esc` returns, and `/new` creates a new session. It does not search transcript content in v1 and never deletes sessions.
 
 P1 subagent and workflow views are collapsible trees derived from durable ids. They show state, label, child id, phase/outcome, and timing when available. They do not permit multi-session parallel dispatch. This adopts the navigation clarity of Grok `17-sessions.md` and `23-dashboard.md:27-111` while rejecting the latter's concurrent dashboard behavior.
 

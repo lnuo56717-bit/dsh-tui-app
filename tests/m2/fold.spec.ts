@@ -24,7 +24,7 @@ describe('M2 deterministic transcript fold', () => {
     const node = partial.nodes[0] as MessageNode
     expect(node.streaming).toBe(true)
     expect(node.blocks).toEqual([
-      { type: 'reasoning', text: '想一想' },
+      { type: 'reasoning', text: '想一想', streaming: true },
       { type: 'text', text: '流式完成' },
       { type: 'tool-call', id: 'call-1', name: 'write', arguments: '{"path":"a"}' },
     ])

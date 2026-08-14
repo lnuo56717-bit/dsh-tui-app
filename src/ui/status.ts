@@ -1,4 +1,6 @@
 import type { RuntimeSnapshot } from '../interaction-controller.js'
+import { displayWidth, takeCells } from './display-width.js'
+import { redactSecrets } from './secrets.js'
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined
@@ -18,6 +20,26 @@ export function projectionValue(runtime: RuntimeSnapshot, key: string): unknown 
 
 export function sessionTitle(runtime: RuntimeSnapshot): string | undefined {
   return text(projectionValue(runtime, 'title'))
+}
+
+/** Coarse age of a durable fact. Never invents precision the timestamp lacks. */
+export function relativeTime(at: number | undefined, now = Date.now()): string | undefined {
+  if (at === undefined || !Number.isFinite(at) || at <= 0) return undefined
+  const delta = now - at
+  if (delta < 60_000) return 'just now'
+  if (delta < 3_600_000) return `${Math.round(delta / 60_000)}m ago`
+  if (delta < 86_400_000) return `${Math.round(delta / 3_600_000)}h ago`
+  if (delta < 604_800_000) return `${Math.round(delta / 86_400_000)}d ago`
+  return new Date(at).toLocaleDateString()
+}
+
+/** Fit text to an exact display-cell column: tail-ellipsized when long, padded when short. */
+export function padCells(value: string, cells: number): string {
+  const limit = Math.max(0, cells)
+  if (limit === 0) return ''
+  if (displayWidth(value) <= limit) return value + ' '.repeat(limit - displayWidth(value))
+  const clipped = takeCells(value, limit - 1)
+  return `${clipped.head}…${' '.repeat(Math.max(0, limit - 1 - clipped.width))}`
 }
 
 export function effectivePermission(runtime: RuntimeSnapshot): string | undefined {
@@ -47,13 +69,21 @@ function tokenUsage(runtime: RuntimeSnapshot): { input: number; output: number; 
   return { input: uncached, output, read, write }
 }
 
-function contextPressure(runtime: RuntimeSnapshot): { used: number; capacity: number; percent: number } | undefined {
+export function contextPressure(runtime: RuntimeSnapshot): { used: number; capacity: number; percent: number } | undefined {
   const value = record(projectionValue(runtime, 'contextPressure'))
   if (value === undefined) return undefined
   const used = nonNegative(value.projectedTokens) ?? nonNegative(value.pressureTokens)
   const capacity = nonNegative(value.contextWindow)
   if (used === undefined || capacity === undefined || capacity === 0) return undefined
-  return { used, capacity, percent: Math.round(used / capacity * 100) }
+  return { used, capacity, percent: Math.min(100, Math.round(used / capacity * 100)) }
+}
+
+/** Compact, high-priority context fact for persistent chrome. Unknown values stay absent. */
+export function contextStatus(runtime: RuntimeSnapshot): string | undefined {
+  const pressure = contextPressure(runtime)
+  if (pressure !== undefined) return `ctx ${pressure.percent}% · ~${formatCount(pressure.used)}/${formatCount(pressure.capacity)}`
+  const capacity = nonNegative(runtime.contextWindow)
+  return capacity === undefined || capacity === 0 ? undefined : `ctx —/${formatCount(capacity)}`
 }
 
 function stats(runtime: RuntimeSnapshot): { turns: number; steps: number; llmMs?: number; toolMs?: number } | undefined {
@@ -67,18 +97,40 @@ function stats(runtime: RuntimeSnapshot): { turns: number; steps: number; llmMs?
   return { turns, steps, ...(llmMs === undefined ? {} : { llmMs }), ...(toolMs === undefined ? {} : { toolMs }) }
 }
 
+const UUID_LIKE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/iu
+
+function looksLikeOpaqueId(value: string): boolean {
+  return UUID_LIKE.test(value)
+    || /sk-|Bearer\s/iu.test(value)
+    || /(?:[0-9a-f]{4,}-){2,}[0-9a-f]{8,}/iu.test(value)
+    || (value.length >= 32 && /[0-9a-f]{20,}/iu.test(value))
+}
+
+/** Short provider/model label. Opaque ids and routes stay off the footer. */
+export function shortModelLabel(model: string): string | undefined {
+  const cleaned = redactSecrets(model).trim()
+  if (cleaned === '') return undefined
+  const slash = cleaned.lastIndexOf('/')
+  if (slash <= 0) return looksLikeOpaqueId(cleaned) ? undefined : (cleaned.length <= 28 ? cleaned : `${cleaned.slice(0, 16)}…`)
+  const provider = cleaned.slice(0, slash)
+  const name = cleaned.slice(slash + 1)
+  if (name === '' || looksLikeOpaqueId(name)) return looksLikeOpaqueId(provider) ? undefined : provider
+  return cleaned.length <= 32 ? cleaned : name
+}
+
 export function statusSegments(runtime: RuntimeSnapshot, detail = true): string[] {
-  const segments = [runtime.model, runtime.cwd]
-  const title = sessionTitle(runtime)
-  if (title !== undefined) segments.push(title)
-  if (runtime.sessionId !== undefined) segments.push(runtime.sessionId)
+  const context = contextStatus(runtime)
+  const model = shortModelLabel(runtime.model)
+  const segments = [
+    ...(context === undefined ? [] : [context]),
+    ...(model === undefined ? [] : [model]),
+    `effort ${runtime.reasoningEffort ?? 'default'}`,
+  ]
   const permission = effectivePermission(runtime)
   if (permission !== undefined) segments.push(permission)
-  if (!detail) return segments
+  if (!detail) return segments.map(redactSecrets)
 
-  const pressure = contextPressure(runtime)
-  if (pressure !== undefined) segments.push(`${formatCount(pressure.used)}/${formatCount(pressure.capacity)} ${pressure.percent}%`)
-  else {
+  if (context === undefined) {
     const usage = tokenUsage(runtime)
     if (usage !== undefined) segments.push(`tokens in ${formatCount(usage.input + usage.read + usage.write)} out ${formatCount(usage.output)}`)
   }
@@ -90,7 +142,24 @@ export function statusSegments(runtime: RuntimeSnapshot, detail = true): string[
   }
   const todos = projectionValue(runtime, 'todos')
   if (Array.isArray(todos)) segments.push(`todos ${todos.length}`)
-  return segments
+  return segments.map(redactSecrets)
+}
+
+/** Fit notice + public facts without middle-ellipsis, which can splice a UUID into the model field. */
+export function formatFooter(runtime: RuntimeSnapshot, signal: string | undefined, cells: number, detail = true): string {
+  const facts = statusSegments(runtime, detail)
+  const notice = signal === undefined || signal.trim() === '' ? undefined : redactSecrets(signal)
+  const limit = Math.max(1, cells)
+  const render = (parts: string[]): string => parts.join(' · ')
+  if (notice === undefined) {
+    const kept = [...facts]
+    while (kept.length > 1 && displayWidth(render(kept)) > limit) kept.pop()
+    return takeCells(render(kept), limit).head
+  }
+  const kept = [...facts]
+  const withNotice = (): string => (kept.length === 0 ? notice : `${notice} │ ${render(kept)}`)
+  while (kept.length > 0 && displayWidth(withNotice()) > limit) kept.pop()
+  return takeCells(withNotice(), limit).head
 }
 
 export function sessionInfoLines(runtime: RuntimeSnapshot): string[] {
@@ -98,7 +167,7 @@ export function sessionInfoLines(runtime: RuntimeSnapshot): string[] {
   const title = sessionTitle(runtime)
   if (title !== undefined) lines.push(`title        ${title}`)
   if (runtime.sessionId !== undefined) lines.push(`session      ${runtime.sessionId}`)
-  lines.push(`cwd          ${runtime.cwd}`, `model        ${runtime.model}`)
+  lines.push(`cwd          ${runtime.cwd}`, `model        ${runtime.model}`, `effort       ${runtime.reasoningEffort ?? 'default'}`)
   const permission = effectivePermission(runtime)
   if (permission !== undefined) lines.push(`permission   ${permission}`)
   if (runtime.projection !== undefined) lines.push(`projection   seq ${runtime.projection.asOfSeq}`)
@@ -108,7 +177,8 @@ export function sessionInfoLines(runtime: RuntimeSnapshot): string[] {
     lines.push(`tokens       input ${formatCount(usage.input)} · output ${formatCount(usage.output)} · cache read ${formatCount(usage.read)} · write ${formatCount(usage.write)}`)
   }
   const pressure = contextPressure(runtime)
-  if (pressure !== undefined) lines.push(`context      ${formatCount(pressure.used)}/${formatCount(pressure.capacity)} · ${pressure.percent}%`)
+  if (pressure !== undefined) lines.push(`context      ~${formatCount(pressure.used)}/${formatCount(pressure.capacity)} · ${pressure.percent}%`)
+  else if (runtime.contextWindow !== undefined) lines.push(`context      —/${formatCount(runtime.contextWindow)}`)
   const breakdown = record(projectionValue(runtime, 'contextBreakdown'))
   const system = nonNegative(breakdown?.systemTokens)
   const tools = nonNegative(breakdown?.toolsTokens)
@@ -137,5 +207,5 @@ export function sessionInfoLines(runtime: RuntimeSnapshot): string[] {
   if (subagent !== undefined && (subagent.mode === 'one-shot' || subagent.mode === 'continuable')) {
     lines.push(`subagent     ${String(subagent.mode)}${text(subagent.label) === undefined ? '' : ` · ${text(subagent.label)}`}`)
   }
-  return lines
+  return lines.map(redactSecrets)
 }

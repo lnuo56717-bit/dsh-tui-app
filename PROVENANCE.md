@@ -71,6 +71,8 @@ Paths below are relative to the extracted rc.6 `package/` directory. The source 
 | command discovery/execute and durable pair | `dsh-commands/lib/types/index.d.ts:83,110`; `lib/types/types.d.ts:67-100` | `packages/interaction/commands/src/index.ts:83-110`; `src/types.ts:67-100` | match |
 | permission select/current/set | `dsh-permission-presets/lib/types/index.d.ts:107-162`; `lib/types/types.d.ts:25-40` | `packages/interaction/permission-presets/src/index.ts:42-57,107-162` | match |
 | default model read/save | `dsh-agent-default-model/lib/types/index.d.ts:40-55` | `packages/core/agent-default-model/src/index.ts:40-55` | match |
+| live per-Agent model snapshot/switch | `dsh-agent/lib/types/model-selection.d.ts:8-35` | `packages/core/agent/src/model-selection.ts:10-74` | match |
+| provider/model catalog, exact model metadata, effort validation | `dsh-llm/lib/types/index.d.ts:234,284,294,306`; `lib/types/types.d.ts:231-257` | `packages/llm/llm/src/index.ts:419-715`; `src/types.ts:233-282` | match |
 | plan get/set and projection | `dsh-plan-mode/lib/types/index.d.ts:36-38,88-116`; `lib/types/types.d.ts:11-24` | `packages/plan/plan-mode/src/index.ts:46-53,80-116` | match |
 | title event/get/rename/refresh/projection | `dsh-session-title/lib/types/index.d.ts:39-73,140-176`; `lib/types/types.d.ts:14-18` | `packages/session/session-title/src/index.ts:39-100,140-176` | match |
 | known projection keys used in status/P1 | `dsh-token-meter/lib/types/projection.d.ts:67-71`; `dsh-session-stats/lib/types/types.d.ts:39`; `dsh-tool-todo/lib/types/types.d.ts:19`; `dsh-subagent/lib/types/projection-types.d.ts:46-57` | corresponding package `src/types.ts`/projection files | match |
@@ -85,6 +87,8 @@ Paths below are relative to the extracted rc.6 `package/` directory. The source 
 | subagent descriptor | `dsh-subagent/lib/types/descriptor.d.ts:34-88` | `packages/subagent/subagent/src/descriptor.ts:28-88` | match |
 | tool-workflow four-event lifecycle | `dsh-tool-workflow/lib/types/types.d.ts:13-54` | `packages/workflow/tool-workflow/src/types.ts:13-62` | match |
 | DeepSeek auxiliary search request | `dsh-web-search-deepseek/lib/types/provider.d.ts:38-64` | `packages/web/web-search-deepseek/src/provider.ts:52-83` | match |
+
+Two rows above are consumed in a read-only way worth naming, because both touch durable state. The session picker reads stored logs through `SessionPersistence.readFrom(id, 0, signal)` (`dsh-session-persistence/lib/types/index.d.ts:167`, inside the audited 118-187 range), falling back to `inspect` when a backend exposes no `readFrom`. That primitive is documented as a detached, non-mutating suffix read: no preparation cache, no torn-tail truncation, no synthetic closers, no coordinator publication. Picker labels then fold the `session/title` payload (`dsh-session-title/lib/types/index.d.ts:38-46,73`, inside the audited 39-73 range) plus human `user/message` events; the fold is local to this app and never calls `SessionTitleService`, which requires a live `Session` the picker deliberately does not have.
 
 ## 4. Deviations and archaeology record
 
