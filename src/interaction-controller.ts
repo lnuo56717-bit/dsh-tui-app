@@ -511,9 +511,18 @@ export class InteractionController {
     const rows = await persistence.list()
     // The live log keeps growing, so its folded summary must not be reused.
     if (this.snapshot.sessionId !== undefined) this.summaries.delete(this.snapshot.sessionId)
-    return rows.map(header => ({
+    const items = rows.map(header => ({
       id: String(header.id), cwd: header.cwd, createdAt: header.createdAt, current: String(header.id) === this.snapshot.sessionId,
-    })).sort((left, right) => right.createdAt - left.createdAt)
+    }))
+    // Order by last activity — the folded log's newest event — not by creation
+    // time, so a long-idle conversation sinks below one touched moments ago.
+    // Folding every persisted log costs one read per session, but the folded
+    // summaries are cached and reused by the picker rows as they scroll in.
+    const ordered = await Promise.all(items.map(async item => ({
+      item,
+      activity: (await this.describeSession(item.id).catch(() => undefined))?.updatedAt ?? item.createdAt,
+    })))
+    return ordered.sort((left, right) => right.activity - left.activity).map(entry => entry.item)
   }
 
   /**

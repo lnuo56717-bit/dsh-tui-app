@@ -16,7 +16,7 @@ const log: EventLike[] = [
   { seq: 6, time: 6_000, type: 'session/title', data: { title: '修复滚轮回填历史', messageSeqs: [1, 5], source: { kind: 'user' } } },
 ]
 
-function fixture(events: readonly EventLike[] | Error) {
+function fixture(events: readonly EventLike[] | Error, perId?: Record<string, readonly EventLike[]>) {
   const reads: string[] = []
   const ctx = {
     on: () => () => {},
@@ -34,7 +34,7 @@ function fixture(events: readonly EventLike[] | Error) {
       async readFrom(id: string, fromSeq: number) {
         reads.push(`${String(id)}@${fromSeq}`)
         if (events instanceof Error) throw events
-        return { meta: { version: 0, id, createdAt: 1_000 }, events }
+        return { meta: { version: 0, id, createdAt: 1_000 }, events: perId?.[String(id)] ?? events }
       },
     },
   }
@@ -74,12 +74,25 @@ describe('persisted sessions read as conversations, not ids', () => {
     expect(summary.title).toBeUndefined()
   })
 
-  it('lists newest first and marks nothing as current before a session is open', async () => {
-    const fx = fixture(log)
+  it('lists by last activity, not by creation time', async () => {
+    // session-a: created 9_000, last activity 9_500; session-b: created 2_000, last activity 6_000.
+    const fx = fixture(log, {
+      'session-a': [...log, { seq: 99, time: 9_500, type: 'assistant/message', data: { turn: 9, step: 9, message: { role: 'assistant', content: [] } } }],
+    })
     const controller = new InteractionController(fx.ctx, 'abyss')
     const items = await controller.listSessions()
     expect(items.map(item => item.id)).toEqual(['session-a', 'session-b'])
     expect(items.every(item => !item.current)).toBe(true)
+  })
+
+  it('puts a freshly used older session above a long-idle newer one', async () => {
+    // session-a: created 9_000 but idle since 1_000; session-b: created 2_000, active until 6_000.
+    const fx = fixture(log, {
+      'session-a': [log[0]!],
+    })
+    const controller = new InteractionController(fx.ctx, 'abyss')
+    const items = await controller.listSessions()
+    expect(items.map(item => item.id)).toEqual(['session-b', 'session-a'])
   })
 
   it('labels a row by title, then opening prompt, then id — and keeps the id in the detail line', () => {
