@@ -14,20 +14,20 @@ describe('M1 transcript fold', () => {
       event(2, 'assistant/message', { message: { content: [{ type: 'text', text: 'Hello' }, { type: 'image' }] } }),
     ])
     expect(state.lastSeq).toBe(2)
-    expect(state.lines).toEqual([
-      { seq: 1, role: 'user', text: '你好' },
-      { seq: 2, role: 'assistant', text: 'Hello' },
-    ])
+    expect(state.nodes[0]).toMatchObject({ kind: 'message', seq: 1, role: 'user', blocks: [{ type: 'text', text: '你好' }] })
+    expect(state.nodes[1]).toMatchObject({ kind: 'message', seq: 2, role: 'assistant' })
+    expect((state.nodes[1] as { blocks: unknown[] }).blocks[0]).toEqual({ type: 'text', text: 'Hello' })
   })
 
   it('treats duplicate and older seq values as no-ops', () => {
-    const first = foldTranscript(EMPTY_TRANSCRIPT, event(4, 'user/message', { content: [{ type: 'text', text: 'one' }] }))
-    expect(foldTranscript(first, event(4, 'user/message', { content: [{ type: 'text', text: 'duplicate' }] }))).toBe(first)
-    expect(foldTranscript(first, event(3, 'user/message', { content: [{ type: 'text', text: 'older' }] }))).toBe(first)
+    const first = foldTranscript(EMPTY_TRANSCRIPT, event(0, 'user/message', { content: [{ type: 'text', text: 'one' }] }))
+    expect(foldTranscript(first, event(0, 'user/message', { content: [{ type: 'text', text: 'duplicate' }] }))).toBe(first)
+    expect(foldTranscript(first, event(-1, 'user/message', { content: [{ type: 'text', text: 'older' }] }))).toBe(first)
   })
 
   it('advances across unrelated events without inventing transcript text', () => {
-    const state = foldTranscript(EMPTY_TRANSCRIPT, event(7, 'tool/call', { name: 'read' }))
-    expect(state).toEqual({ lastSeq: 7, lines: [] })
+    const state = foldTranscript(EMPTY_TRANSCRIPT, event(0, 'turn/start', { turn: 1 }))
+    expect(state.lastSeq).toBe(0)
+    expect(state.nodes).toEqual([])
   })
 })

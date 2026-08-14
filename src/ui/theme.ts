@@ -9,6 +9,9 @@ export interface Theme {
   text: string
   muted: string
   user: string
+  success: string
+  danger: string
+  warning: string
 }
 
 const deepOcean: Theme = {
@@ -20,6 +23,9 @@ const deepOcean: Theme = {
   text: '#DCE7FF',
   muted: '#7186AA',
   user: '#9FB0FF',
+  success: '#67E8B1',
+  danger: '#FF7A8A',
+  warning: '#F6C177',
 }
 
 const mono: Theme = {
@@ -31,6 +37,9 @@ const mono: Theme = {
   text: '#FFFFFF',
   muted: '#AAAAAA',
   user: '#FFFFFF',
+  success: '#FFFFFF',
+  danger: '#FFFFFF',
+  warning: '#FFFFFF',
 }
 
 export function resolveTheme(name: ThemeName, color: ColorMode): Theme {

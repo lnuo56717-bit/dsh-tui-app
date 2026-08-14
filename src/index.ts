@@ -1,12 +1,17 @@
 import type { Context } from '@deepseek-ai/cordis'
+import { randomUUID } from 'node:crypto'
+import { installModelSelection, type ModelSelectionRef } from '@deepseek-ai/dsh-agent'
+import type {} from '@deepseek-ai/dsh-agent-default-model'
+import { SessionId } from '@deepseek-ai/dsh-session'
 import { render } from 'ink'
 import React from 'react'
 import type { ColorMode, ThemeName } from './startup.js'
+import { attachTranscript } from './transcript-store.js'
 import { Shell } from './ui/app.js'
 import { enterFullscreen } from './ui/terminal.js'
 
 export const name = 'tui-runner'
-export const inject = ['tuiStartup']
+export const inject = ['tuiStartup', 'agentDefaultModel', 'agents', 'sessions']
 
 export interface Config {
   resume?: string
@@ -24,9 +29,29 @@ async function run(ctx: Context, config: Config): Promise<void> {
     appExit(1)
     return
   }
+  const agents = ctx.get('agents')
+  const defaultModel = ctx.get('agentDefaultModel')
+  if (agents === undefined || defaultModel === undefined) return
+  const selection = defaultModel.currentSelection()
+  const handle = await agents.create({
+    sessionId: SessionId(`session-${randomUUID()}`),
+    meta: { cwd: process.cwd() },
+    agentOptions: { provider: selection.provider, model: selection.model },
+    setup: (agentCtx) => {
+      const selected: ModelSelectionRef = { current: selection, assembled: undefined }
+      installModelSelection(agentCtx, selected)
+    },
+  })
+  await handle.agent.whenIdle()
+  const attached = attachTranscript(handle.agent.ctx, handle.agent.session)
   const terminal = enterFullscreen()
   try {
-    const instance = render(React.createElement(Shell, config), {
+    const instance = render(React.createElement(Shell, {
+      ...config,
+      store: attached.store,
+      sessionId: String(handle.agent.session.id),
+      model: `${selection.provider}/${selection.model}`,
+    }), {
       exitOnCtrlC: false,
       patchConsole: true,
     })
@@ -34,6 +59,8 @@ async function run(ctx: Context, config: Config): Promise<void> {
     instance.unmount()
   } finally {
     terminal.release()
+    attached.dispose()
+    await handle.dispose()
   }
   appExit(0)
 }
@@ -46,3 +73,4 @@ export function apply(ctx: Context, config: Config): void {
 }
 
 export { foldEvents, foldTranscript } from './transcript-fold.js'
+export { TranscriptStore, attachTranscript } from './transcript-store.js'
