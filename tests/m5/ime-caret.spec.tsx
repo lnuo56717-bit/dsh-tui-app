@@ -21,6 +21,9 @@ function harness() {
 
   const instance = render(<Shell theme="abyss" color="mono" sessionId="session-caret" stdout={stdout} />, {
     stdout, stdin, patchConsole: false, exitOnCtrlC: false,
+    // CI runners default Ink to non-interactive, which defers frame writes to unmount.
+    // Pin interactive so the caret/frame output stays real-time in tests on any host.
+    interactive: true,
   })
   return {
     stdin,
