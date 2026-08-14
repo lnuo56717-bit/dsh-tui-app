@@ -24,12 +24,12 @@ function harness(agentStatus: RuntimeSnapshot['agentStatus']) {
     permission: 'workspace-write', projection: undefined, theme: 'abyss', notice: undefined, error: undefined,
     approval: undefined, questions: undefined,
   }
-  const calls = { cancels: 0, submits: 0 }
+  const calls = { cancels: 0, submits: 0, keep: [] as boolean[] }
   const controller = {
     transcript: new TranscriptStore(),
     subscribe: () => () => {},
     getSnapshot: () => snapshot,
-    cancel: () => { calls.cancels += 1; return true },
+    cancel: (keepInbox?: boolean) => { calls.cancels += 1; calls.keep.push(keepInbox === true); return true },
     submit: () => { calls.submits += 1 },
     notify: () => {},
     commandChoices: () => [],
@@ -73,12 +73,33 @@ describe('interrupting a running turn', () => {
       await untilFrame(app, 'FOLLOW-UP')
       app.stdin.write('\u001B')
       await untilCount(app, 'cancels', 1)
+      expect(app.calls.keep).toEqual([false])
     } finally {
       app.instance.unmount()
     }
   })
 
-  it('two Enters within the window stop the turn; one Enter only arms it', async () => {
+  it('Enter sends the draft and a second Enter takes over without dropping it', async () => {
+    const app = harness('running')
+    try {
+      await untilFrame(app, 'FOLLOW-UP')
+      app.stdin.write('继续')
+      await settle()
+      app.stdin.write('\r')
+      await untilCount(app, 'submits', 1)
+      expect(app.calls.cancels).toBe(0)
+      // The sent draft arms the take-over hint on the help line.
+      expect(app.frame()).toContain('Enter again to take over')
+      app.stdin.write('\r')
+      await untilCount(app, 'cancels', 1)
+      // keepInbox: the queued message survives and the agent keeps thinking with it.
+      expect(app.calls.keep).toEqual([true])
+    } finally {
+      app.instance.unmount()
+    }
+  })
+
+  it('two Enters with no draft still stop the turn', async () => {
     const app = harness('running')
     try {
       await untilFrame(app, 'FOLLOW-UP')
@@ -88,6 +109,7 @@ describe('interrupting a running turn', () => {
       expect(app.frame()).toContain('Enter again to stop')
       app.stdin.write('\r')
       await untilCount(app, 'cancels', 1)
+      expect(app.calls.keep).toEqual([false])
     } finally {
       app.instance.unmount()
     }
@@ -102,6 +124,22 @@ describe('interrupting a running turn', () => {
       await settle(1_300)
       expect(app.calls.cancels).toBe(0)
       expect(app.frame()).not.toContain('Enter again to stop')
+    } finally {
+      app.instance.unmount()
+    }
+  })
+
+  it('a take-over window also expires without stopping the turn', async () => {
+    const app = harness('running')
+    try {
+      await untilFrame(app, 'FOLLOW-UP')
+      app.stdin.write('继续')
+      await settle()
+      app.stdin.write('\r')
+      await untilCount(app, 'submits', 1)
+      await untilFrame(app, 'Enter again to take over')
+      await settle(1_300)
+      expect(app.calls.cancels).toBe(0)
     } finally {
       app.instance.unmount()
     }

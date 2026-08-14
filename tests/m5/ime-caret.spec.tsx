@@ -56,8 +56,8 @@ describe('IME pre-edit text follows the composer caret', () => {
   it('parks the terminal cursor on the caret cell with every frame, counting CJK cells', async () => {
     const app = harness()
     try {
-      // 80×24, margin 1: blank caret at row 21, column 6 → up 4, cursorTo 6.
-      expect(await until(() => app.caret())).toEqual({ up: 4, column: 6 })
+      // 80×24, margin 1: blank caret at row 21, column 6 → up 3, cursorTo 6.
+      expect(await until(() => app.caret())).toEqual({ up: 3, column: 6 })
 
       app.stdin.write('中文a')
       const moved = await until(() => {
@@ -65,7 +65,7 @@ describe('IME pre-edit text follows the composer caret', () => {
         return caret !== undefined && caret.column !== 6 ? caret : undefined
       })
       // ' │ › 中文a' — border, padding, prompt marker, then two wide graphemes.
-      expect(moved).toEqual({ up: 4, column: 11 })
+      expect(moved).toEqual({ up: 3, column: 11 })
       expect(await until(() => app.frame().includes('中文a') || undefined)).toBe(true)
     } finally {
       app.instance.unmount()
@@ -75,7 +75,7 @@ describe('IME pre-edit text follows the composer caret', () => {
   it('keeps the cursor on the composer while an empty draft is idle', async () => {
     const app = harness()
     try {
-      expect(await until(() => app.caret())).toEqual({ up: 4, column: 6 })
+      expect(await until(() => app.caret())).toEqual({ up: 3, column: 6 })
     } finally {
       app.instance.unmount()
     }

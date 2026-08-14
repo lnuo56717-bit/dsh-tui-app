@@ -428,11 +428,16 @@ export class InteractionController {
     this.patch({ notice: redactSecrets(message), error: undefined })
   }
 
-  cancel(): boolean {
+  /**
+   * Abort the active turn. With `keepInbox` the just-sent draft survives in
+   * the inbox: the aborted activity converges and the agent immediately starts
+   * the next turn with it — the double-Enter "take over" gesture.
+   */
+  cancel(keepInbox = false): boolean {
     const agent = this.handle?.agent
     if (agent?.status !== 'running') return false
-    agent.cancel({ kind: 'user' })
-    this.patch({ notice: 'Cancelling active turn…' })
+    agent.cancel({ kind: 'user' }, keepInbox ? { keepInbox: true } : {})
+    this.patch({ notice: keepInbox ? 'Taking over with your message…' : 'Cancelling active turn…' })
     return true
   }
 

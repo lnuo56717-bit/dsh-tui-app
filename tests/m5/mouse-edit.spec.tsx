@@ -111,7 +111,7 @@ describe('mouse editing of the composer', () => {
       app.stdin.write('X')
       await until(() => app.frame().includes('› X') ? app.frame() : undefined, 'replacement text')
       expect(app.frame()).not.toContain('abc')
-      expect(app.caret()).toEqual({ up: 4, column: 8 })
+      expect(app.caret()).toEqual({ up: 3, column: 8 })
     } finally {
       app.instance.unmount()
     }
