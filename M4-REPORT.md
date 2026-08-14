@@ -40,3 +40,5 @@ npm pack --dry-run  PASS — 39 packaged entries
 ```
 
 No additional Harness copy was downloaded. The pre-existing `dsh` launcher was used for every integration and PTY test. The shared `D:\deepseek-harness` worktree was read-only throughout; its pre-existing competitor changes remained byte-for-byte unchanged by this project.
+
+Post-delivery convenience: `scripts/install-default-command.ps1` installs the real user `tui` profile and makes a no-argument `dsh` invocation route to it. The wrapper preserves all explicit upstream CLI invocations and keeps a `dsh.cmd.pre-dsh-tui` rollback copy. A dedicated 80×24 PTY check confirmed bare `dsh` opens this TUI and exits cleanly without modifying the shared checkout.

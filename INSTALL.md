@@ -69,3 +69,13 @@ npm run test:ac:all
 ```
 
 AC-1 through AC-5 use isolated `DSH_HOME` directories under the repository and the already-installed launcher. Generated acceptance artifacts are gitignored.
+
+## Make bare `dsh` open this TUI
+
+On this Windows local-workspace installation, run the idempotent helper once:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-default-command.ps1
+```
+
+It builds the project, installs the real `tui` profile, and adds an argument-aware branch to the resolved `dsh.cmd`: bare `dsh` becomes `dsh --profile tui`, while `dsh --help`, `dsh web`, `dsh plugin ...`, and every other explicit invocation retain upstream behavior. The original wrapper is saved beside it as `dsh.cmd.pre-dsh-tui`; restore that file to undo the default routing. Re-run the helper if a future launcher installation replaces the wrapper.

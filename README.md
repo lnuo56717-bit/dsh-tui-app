@@ -27,6 +27,15 @@ dsh --profile tui --help
 dsh --profile tui
 ```
 
+To make a bare `dsh` command open this TUI on the validated Windows local-workspace installation:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-default-command.ps1
+dsh
+```
+
+Explicit commands such as `dsh --help`, `dsh web`, and `dsh plugin ...` remain routed to the upstream CLI.
+
 The plugin creates/updates the isolated `tui` profile with `@deepseek-ai/dsh-base` followed by `dsh-tui-app`; it does not edit the Harness checkout. Resume a durable session with:
 
 ```powershell
