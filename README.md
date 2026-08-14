@@ -12,7 +12,9 @@ A full-screen terminal interface (TUI) for DeepSeek Harness (`dsh`), built as an
 - **Folded tool output** — tool results render preformatted (never re-flowed as prose) and collapse to a six-line preview that carries the real line count. Arrow keys select any block; `→`/`←` expand and collapse; `Ctrl+E` toggles everything.
 - **Row-precise scrollback** — the viewport is a window over rendered terminal lines, not over nodes: one wheel notch always moves three lines, a proportional scrollbar tracks position, streaming appends stay anchored on what you are reading, and a released wheel returns to the pinned live tail.
 - **In-place IME composition** — the terminal cursor is parked on the composer caret every frame, so pinyin/pre-edit text composes inside the prompt instead of at the bottom of the screen.
-- **Clipboard copy** — `Ctrl+Y` copies the selected block (or the newest one) through the terminal's OSC 52 sink and the platform clipboard tool; `Shift`+drag gives the terminal's native selection; `/mouse` hands the mouse back to the terminal entirely.
+- **Clipboard copy** — `Ctrl+Y` copies the selected block (or the newest one, or the composer's mouse selection) through the terminal's OSC 52 sink and the platform clipboard tool; releasing a transcript drag also copies; `Shift`+drag gives the terminal's native selection; `/mouse` hands the mouse back to the terminal entirely.
+- **Stop & take over** — `Esc` stops a running turn outright. Sending a draft while a turn runs arms the take-over: pressing `Enter` again (or `Esc`) aborts the turn and re-sends the queued drafts as fresh follow-ups, so the agent immediately continues thinking with them. Two `Enter`s on an empty composer just stop the turn; `Ctrl+C` is the hard stop that also drops queued drafts.
+- **Mouse editing** — click the composer to place the caret (display-cell precise, CJK-safe); drag inside it to select and type to replace; click a transcript row to focus its block; drag across the transcript to select rows and copy on release.
 - **Multiline editing & history** — multiline prompts, queued follow-ups, prompt history recall (`↑` on an empty composer; the wheel never recalls history), and explicit step steering.
 - **Live model & effort switching** — `/switch` changes the next not-yet-assembled step; `/effort` only offers exact-model levels advertised by the active adapter. Nothing is hard-coded: catalogs and capabilities come from `ctx.llm`.
 - **Reasoning disclosure** — Grok-style views over real dsh reasoning events: live tail, stable settled summary, bounded preview, and an independently scrollable detail view.
@@ -95,13 +97,15 @@ Commands advertised by dsh execute through the host command registry; exact-name
 | Key | Action |
 |---|---|
 | `Enter` | send a normal prompt/follow-up; insert newline in multiline mode |
+| `Enter` ×2 | with a fresh draft: send, then take over the running turn with it; on an empty composer: stop the running turn |
+| `Esc` | stop a running turn; otherwise close an overlay or park a blocking card without answering it |
 | `Ctrl+M` / `Alt+Enter` | toggle multiline / send multiline; from transcript, open the model picker |
 | `Ctrl+L` | steer the current or next step |
 | `Ctrl+W`, `Ctrl+U`, `Ctrl+K` | delete word / to line start / to line end |
 | `Ctrl+P` or `?` | open fuzzy dsh + local command palette |
 | `Ctrl+S` | open persisted session picker |
 | `Ctrl+X` | open the complete in-app key page |
-| `Ctrl+Y` | copy the selected block, or the newest one, to the clipboard |
+| `Ctrl+Y` | copy the selected block, the composer's mouse selection, or the newest block, to the clipboard |
 | `Ctrl+E` | expand/collapse every tool output and reasoning preview |
 | `Shift+Tab` | cycle only permission presets advertised by dsh |
 | `Tab` | move between composer, blocking card, and transcript |
@@ -112,8 +116,9 @@ Commands advertised by dsh execute through the host command registry; exact-name
 | `Up` on an empty composer | recall previous prompt after a short pause (wheel bursts are ignored) |
 | `Ctrl+Up` / `Ctrl+Down` | recall prompt history immediately |
 | `Up`, `Down`, `Left`, `Right`, `Enter` in transcript | select a tool output or reasoning block, fold/expand it, or open full detail |
+| Mouse click | composer: move the caret to the clicked cell; transcript: focus the block under the cursor |
+| Mouse drag | composer: select text (typing replaces it); transcript: select rows and copy on release |
 | `Shift`+drag | the terminal's own selection and copy, unaffected by mouse tracking |
-| `Esc` | close an overlay or park a blocking card without answering it |
 | `Ctrl+C` | cancel a running turn; otherwise clear draft; press twice when idle/empty to quit |
 
 Approvals use `y`/`1` (allow once), `n`/`2` (reject), or `3` (change the real permission preset and then allow once). Questions use arrows, digits, Space for multi-select, `z` for free text, and Enter to advance/submit.
@@ -134,7 +139,8 @@ Approvals use `y`/`1` (allow once), `n`/`2` (reject), or `3` (change the real pe
 | Themes | Abyss/Pearl + capability fallbacks | Browser theme system |
 | CJK and grapheme-safe editing | Yes, Windows Terminal validated | Browser text engine |
 | Image/media rendering | Metadata placeholder only | Rich media surfaces |
-| Mouse, transcript search, multi-root dashboard | Not in v1 | Available or better suited to Web UI |
+| In-pane mouse editing | Click-to-caret and drag-select in the composer; click-to-focus and drag-copy in the transcript | Browser selection |
+| Transcript search, multi-root dashboard | Not in v1 | Available or better suited to Web UI |
 | Remote/browser attachment and DOM slots | Deliberately not used | Native architecture |
 
 ## Development
@@ -153,7 +159,7 @@ The full local acceptance requires the existing `dsh` launcher for AC-1 through 
 ## Known limitations
 
 - Windows Terminal is the supported Windows emulator; legacy conhost is best-effort monochrome.
-- Block disclosure is keyboard-first; click-to-select is not a v1 feature. Drag-selection belongs to the terminal: hold `Shift`, or turn mouse tracking off with `/mouse`. The UI displays only reasoning emitted by Harness and never invents completion estimates or activity claims.
+- Block disclosure is keyboard-first, with mouse support for the common gestures: a click places the composer caret or focuses a transcript block, and a drag selects — releasing a transcript drag copies. The terminal's own selection still works via `Shift`+drag, or by handing the mouse back with `/mouse`. The UI displays only reasoning emitted by Harness and never invents completion estimates or activity claims.
 - `Ctrl+Y` reports what it attempted, not what the clipboard now holds: OSC 52 delivery is unobservable, and a terminal may refuse it. On Windows the `clip.exe` path is authoritative. Copy takes the block's source text, so a folded preview and an expanded one copy the same thing.
 - Assistant messages are still rendered in full; only tool output folds. A model that emits a very long code block in its own answer still prints it.
 - Placing the terminal cursor on the composer caret is what lets an IME compose in place. A terminal that ignores cursor positioning keeps the old behavior.

@@ -50,6 +50,7 @@ function harness(withTranscript: boolean) {
     subscribe: () => () => {},
     getSnapshot: () => snapshot,
     cancel: () => false,
+    takeOver: () => false,
     submit: () => {},
     notify: () => {},
     commandChoices: () => [],

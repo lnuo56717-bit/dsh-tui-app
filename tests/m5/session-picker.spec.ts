@@ -16,7 +16,7 @@ const log: EventLike[] = [
   { seq: 6, time: 6_000, type: 'session/title', data: { title: '修复滚轮回填历史', messageSeqs: [1, 5], source: { kind: 'user' } } },
 ]
 
-function fixture(events: readonly EventLike[] | Error, perId?: Record<string, readonly EventLike[]>) {
+function fixture(events: readonly EventLike[] | Error, perId?: Record<string, readonly EventLike[]>, raw?: Record<string, string>) {
   const reads: string[] = []
   const ctx = {
     on: () => () => {},
@@ -35,6 +35,11 @@ function fixture(events: readonly EventLike[] | Error, perId?: Record<string, re
         reads.push(`${String(id)}@${fromSeq}`)
         if (events instanceof Error) throw events
         return { meta: { version: 0, id, createdAt: 1_000 }, events: perId?.[String(id)] ?? events }
+      },
+      async readRaw(id: string) {
+        const content = raw?.[String(id)]
+        if (content === undefined) return undefined
+        return { meta: { version: 0, id, createdAt: 1_000 }, filename: 'session.jsonl', content }
       },
     },
   }
@@ -71,6 +76,34 @@ describe('persisted sessions read as conversations, not ids', () => {
     const controller = new InteractionController(fx.ctx, 'abyss')
     const summary = await controller.describeSession('session-b')
     expect(summary.unreadable).toContain('unsupported session format version 9')
+    expect(summary.title).toBeUndefined()
+  })
+
+  it('rescues the title from the raw artifact when the strict read rejects the log', async () => {
+    // The jsonl backend stores dense chunk runs as packed rows; the raw rescue
+    // expands them and folds the same facts the strict read would have.
+    const raw = [
+      JSON.stringify({ type: 'session', version: 0, id: 'session-b' }),
+      JSON.stringify({ seq: 0, time: 1_000, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '开头的问题' }] } }),
+      JSON.stringify({ seq: 1, time: 2_000, type: 'session/title', data: { title: '损坏日志的标题' } }),
+      JSON.stringify({ type: 'reasoning-chunks', seq0: 2, time0: 3_000, data: { turn: 1, step: 1, index: 0, dt: [5], texts: ['a', 'b'] } }),
+      JSON.stringify({ seq: 4, time: 9_000, type: 'assistant/message', data: { turn: 1, step: 1, message: { role: 'assistant', content: [{ type: 'text', text: '好的' }] } } }),
+    ].join('\n')
+    const fx = fixture(new Error('corrupt session log: seq gap in committed region'), undefined, { 'session-b': raw })
+    const controller = new InteractionController(fx.ctx, 'abyss')
+    const summary = await controller.describeSession('session-b')
+    expect(summary.title).toBe('损坏日志的标题')
+    expect(summary.firstPrompt).toBe('开头的问题')
+    expect(summary.prompts).toBe(1)
+    expect(summary.updatedAt).toBe(9_000)
+    expect(summary.unreadable).toBeUndefined()
+  })
+
+  it('keeps the id when both the strict read and the raw artifact are unusable', async () => {
+    const fx = fixture(new Error('corrupt session log: seq gap in committed region'), undefined, { 'session-b': 'not json at all' })
+    const controller = new InteractionController(fx.ctx, 'abyss')
+    const summary = await controller.describeSession('session-b')
+    expect(summary.unreadable).toContain('seq gap')
     expect(summary.title).toBeUndefined()
   })
 

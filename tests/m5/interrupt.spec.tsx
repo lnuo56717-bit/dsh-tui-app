@@ -24,12 +24,13 @@ function harness(agentStatus: RuntimeSnapshot['agentStatus']) {
     permission: 'workspace-write', projection: undefined, theme: 'abyss', notice: undefined, error: undefined,
     approval: undefined, questions: undefined,
   }
-  const calls = { cancels: 0, submits: 0, keep: [] as boolean[] }
+  const calls = { cancels: 0, submits: 0, takeOvers: 0, keep: [] as boolean[], takeoverTexts: [] as string[][] }
   const controller = {
     transcript: new TranscriptStore(),
     subscribe: () => () => {},
     getSnapshot: () => snapshot,
     cancel: (keepInbox?: boolean) => { calls.cancels += 1; calls.keep.push(keepInbox === true); return true },
+    takeOver: (texts: readonly string[]) => { calls.takeOvers += 1; calls.takeoverTexts.push([...texts]); return true },
     submit: () => { calls.submits += 1 },
     notify: () => {},
     commandChoices: () => [],
@@ -57,7 +58,7 @@ async function untilFrame(app: ReturnType<typeof harness>, text: string, timeout
   }
 }
 
-async function untilCount(app: ReturnType<typeof harness>, field: 'cancels' | 'submits', count: number, timeout = 2_000): Promise<void> {
+async function untilCount(app: ReturnType<typeof harness>, field: 'cancels' | 'submits' | 'takeOvers', count: number, timeout = 2_000): Promise<void> {
   const deadline = Date.now() + timeout
   for (;;) {
     if (app.calls[field] === count) return
@@ -79,7 +80,7 @@ describe('interrupting a running turn', () => {
     }
   })
 
-  it('Enter sends the draft and a second Enter takes over without dropping it', async () => {
+  it('Enter sends the draft and a second Enter takes over with it', async () => {
     const app = harness('running')
     try {
       await untilFrame(app, 'FOLLOW-UP')
@@ -89,11 +90,30 @@ describe('interrupting a running turn', () => {
       await untilCount(app, 'submits', 1)
       expect(app.calls.cancels).toBe(0)
       // The sent draft arms the take-over hint on the help line.
-      expect(app.frame()).toContain('Enter again to take over')
+      expect(app.frame()).toContain('Enter again or Esc to take over')
       app.stdin.write('\r')
-      await untilCount(app, 'cancels', 1)
-      // keepInbox: the queued message survives and the agent keeps thinking with it.
-      expect(app.calls.keep).toEqual([true])
+      await untilCount(app, 'takeOvers', 1)
+      // The wake is re-sent after the abort, so the draft survives and the
+      // agent keeps thinking with it — the plain stop path never fires.
+      expect(app.calls.cancels).toBe(0)
+      expect(app.calls.takeoverTexts).toEqual([['继续']])
+    } finally {
+      app.instance.unmount()
+    }
+  })
+
+  it('Esc takes over with the sent draft instead of dropping it', async () => {
+    const app = harness('running')
+    try {
+      await untilFrame(app, 'FOLLOW-UP')
+      app.stdin.write('继续')
+      await settle()
+      app.stdin.write('\r')
+      await untilCount(app, 'submits', 1)
+      app.stdin.write('\u001B')
+      await untilCount(app, 'takeOvers', 1)
+      expect(app.calls.cancels).toBe(0)
+      expect(app.calls.takeoverTexts).toEqual([['继续']])
     } finally {
       app.instance.unmount()
     }
@@ -129,7 +149,7 @@ describe('interrupting a running turn', () => {
     }
   })
 
-  it('a take-over window also expires without stopping the turn', async () => {
+  it('take-over still fires after a long pause, as long as the turn runs', async () => {
     const app = harness('running')
     try {
       await untilFrame(app, 'FOLLOW-UP')
@@ -137,8 +157,12 @@ describe('interrupting a running turn', () => {
       await settle()
       app.stdin.write('\r')
       await untilCount(app, 'submits', 1)
-      await untilFrame(app, 'Enter again to take over')
+      await untilFrame(app, 'Enter again or Esc to take over')
+      // The armed hint expires, but the take-over arm does not.
       await settle(1_300)
+      expect(app.frame()).toContain('Enter again or Esc to take over')
+      app.stdin.write('\r')
+      await untilCount(app, 'takeOvers', 1)
       expect(app.calls.cancels).toBe(0)
     } finally {
       app.instance.unmount()

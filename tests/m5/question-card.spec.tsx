@@ -45,6 +45,7 @@ function harness(questions: RuntimeSnapshot['questions']) {
     getSnapshot: () => snapshot,
     answerQuestions: (answers: QuestionAnswerItem[]) => { answered.push(answers) },
     cancel: () => false,
+    takeOver: () => false,
     notify: () => {},
     commandChoices: () => [],
     permissionNames: () => [],

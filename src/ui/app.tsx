@@ -150,7 +150,7 @@ function Panel({ overlay, editor, controller, runtime, store, theme, plain, widt
     <Text><Text bold>Mouse</Text>  click the composer to move the caret · drag selects · click the transcript to focus a block</Text>
     <Text><Text bold>Policy</Text> Shift+Tab cycles only advertised dsh permission presets</Text>
     <Text><Text bold>Blockers</Text> approval y/n/3 · questions arrows/digits/Space/z/Enter</Text>
-    <Text><Text bold>Stop</Text>  Esc stops the turn · Enter sends your draft, Enter again takes over with it · Ctrl+C cancel, clear draft, then confirm quit</Text>
+    <Text><Text bold>Stop</Text>  Esc stops the turn · Enter sends your draft, Enter again or Esc takes over with it · Ctrl+C cancel, clear draft, then confirm quit</Text>
   </PanelFrame>
   if (overlay.kind === 'session-info') return <PanelFrame title="SESSION INFO" theme={theme} plain={plain}>
     {sessionInfoLines(runtime).map(line => <Text key={line}>{line}</Text>)}
@@ -294,8 +294,10 @@ export function Shell(props: ShellProps): React.JSX.Element {
   const [quitArmed, setQuitArmed] = useState(false)
   const [stopArmed, setStopArmed] = useState(false)
   const enterAt = useRef(0)
-  /** When a draft was last sent; a second Enter inside the window takes over instead of stopping. */
+  /** When a draft was last sent while the turn ran; the take-over gesture re-sends the queued drafts. */
   const lastSentAt = useRef(0)
+  /** Drafts sent since the turn last went idle; take-over re-sends all of them after the abort. */
+  const lastSentTexts = useRef<string[]>([])
   const stopTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const mouseDrag = useRef<{ area: 'composer'; anchor: number } | { area: 'transcript'; anchorRow: number; anchorCol: number } | undefined>(undefined)
   const [transcriptSel, setTranscriptSel] = useState<RowSelection | undefined>()
@@ -381,6 +383,7 @@ export function Shell(props: ShellProps): React.JSX.Element {
       setStopArmed(false)
       enterAt.current = 0
       lastSentAt.current = 0
+      lastSentTexts.current = []
     }
   }, [runtime.agentStatus])
 
@@ -620,10 +623,11 @@ export function Shell(props: ShellProps): React.JSX.Element {
     setScrollOffset(0)
     clearTimeout(wheelBurst.current.historyTimer)
     wheelBurst.current.historyTimer = undefined
-    // A send during a running turn queues the draft; arm the second Enter so a
-    // follow-up press takes over right away instead of waiting out the turn.
+    // A send during a running turn queues the draft; the next Enter or Esc
+    // takes over right away instead of waiting out the turn.
     if (runtime.agentStatus === 'running') {
       lastSentAt.current = Date.now()
+      lastSentTexts.current = [...lastSentTexts.current, editor.text].slice(-8)
       setStopArmed(true)
       clearTimeout(stopTimer.current)
       stopTimer.current = setTimeout(() => setStopArmed(false), DOUBLE_ENTER_MS + 250)
@@ -809,8 +813,20 @@ export function Shell(props: ShellProps): React.JSX.Element {
       return
     }
 
-    // Grok's simple-mode policy: a running turn swallows Esc and stops.
-    if (key.escape && runtime.agentStatus === 'running') { controller?.cancel(); return }
+    // Grok's simple-mode policy: a running turn swallows Esc. When drafts were
+    // sent and not yet taken over, Esc takes over with them; otherwise it is
+    // the plain stop.
+    if (key.escape && runtime.agentStatus === 'running') {
+      if (lastSentAt.current !== 0) {
+        controller?.takeOver(lastSentTexts.current)
+        lastSentTexts.current = []
+      } else {
+        controller?.cancel()
+      }
+      lastSentAt.current = 0
+      setStopArmed(false)
+      return
+    }
 
     if (overlay !== undefined) {
       if (overlay.kind === 'commands') {
@@ -969,18 +985,21 @@ export function Shell(props: ShellProps): React.JSX.Element {
     else if (key.upArrow || key.downArrow) handleVerticalNav(key.upArrow ? 'up' : 'down', false)
     else if (key.return) {
       if (runtime.agentStatus === 'running' && editor.text.trim() === '') {
-        // Double Enter: right after a send it TAKES OVER — the queued draft
-        // survives (`keepInbox`) and the agent continues thinking with it.
-        // Without a recent send it just stops the turn.
+        // Double Enter: after a send it TAKES OVER — the queued drafts are
+        // re-sent after the abort so the agent immediately continues thinking
+        // with them, for as long as the turn still runs. Without a recent send
+        // the second Enter just stops the turn (the armed window below).
         const now = Date.now()
-        const takeover = lastSentAt.current !== 0 && now - lastSentAt.current <= DOUBLE_ENTER_MS
+        const takeover = lastSentAt.current !== 0
         const armed = enterAt.current !== 0 && now - enterAt.current <= DOUBLE_ENTER_MS
         if (takeover || armed) {
           enterAt.current = 0
           lastSentAt.current = 0
           setStopArmed(false)
           clearTimeout(stopTimer.current)
-          controller?.cancel(takeover)
+          if (takeover) controller?.takeOver(lastSentTexts.current)
+          else controller?.cancel()
+          lastSentTexts.current = []
           return
         }
         enterAt.current = now
@@ -1020,9 +1039,11 @@ export function Shell(props: ShellProps): React.JSX.Element {
           : focus === 'transcript'
             ? '↑↓ block · ←→ fold · Ctrl+Y copy · End latest'
             : runtime.agentStatus === 'running'
-              ? stopArmed
-                ? lastSentAt.current !== 0 ? 'Enter again to take over · Esc stops' : 'Enter again to stop · Esc stops now'
-                : 'Esc stop · Enter sends · Enter again takes over'
+              ? lastSentAt.current !== 0
+                ? 'Enter again or Esc to take over · Ctrl+C hard stop'
+                : stopArmed
+                  ? 'Enter again to stop · Esc stops now'
+                  : 'Esc stop · Enter sends · Enter again takes over'
               : 'Enter send · Ctrl+P commands · Ctrl+Y copy last block'
   const helpLine = middleEllipsis(quitArmed ? 'Ctrl+C again to quit' : compact ? help : `${help} · Ctrl+S sessions · Shift+Tab permissions`, Math.max(1, columns - margin * 2))
 

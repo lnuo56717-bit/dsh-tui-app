@@ -3,7 +3,7 @@ import {
   installModelSelection, type Agent, type AgentHandle, type ModelSelection, type ModelSelectionRef,
 } from '@deepseek-ai/dsh-agent'
 import { randomUUID } from 'node:crypto'
-import { SessionId, type SessionHeader, type UserMessage } from '@deepseek-ai/dsh-session'
+import { decodeStorageRecord, SessionId, type SessionHeader, type UserMessage } from '@deepseek-ai/dsh-session'
 import {
   attachProjections, type AttachedProjections, type ProjectionRegistryLike, type ProjectionSnapshotView,
 } from './projection-store.js'
@@ -157,6 +157,8 @@ interface PersistenceService {
   readFrom?(id: ReturnType<typeof SessionId>, fromSeq: number, signal?: AbortSignal): Promise<StoredLog>
   /** Immutable logical view; used when a backend predates `readFrom`. */
   inspect?(id: ReturnType<typeof SessionId>, signal?: AbortSignal): Promise<StoredLog>
+  /** The backend's own raw artifact text; the rescue read when `readFrom` rejects a torn log. */
+  readRaw?(id: ReturnType<typeof SessionId>, signal?: AbortSignal): Promise<{ meta: SessionHeader; content: string } | undefined>
 }
 interface PermissionService {
   readonly names: readonly string[]
@@ -441,6 +443,31 @@ export class InteractionController {
     return true
   }
 
+  /**
+   * Double-Enter interject: Enter queued one or more drafts, the take-over
+   * gesture aborts the turn and re-sends every draft. The wake must arrive
+   * AFTER the abort so the harness latches it against the converging phase —
+   * a plain `cancel(keepInbox)` keeps the parked message but never wakes the
+   * driver. When the drafts were already claimed by a converged turn there is
+   * nothing to take over and this returns false without duplicating them.
+   */
+  takeOver(texts: readonly string[]): boolean {
+    const agent = this.handle?.agent
+    const pending = texts.map(item => item.trim()).filter(item => item !== '')
+    if (agent === undefined || pending.length === 0) return false
+    if (agent.status !== 'running') return false
+    if (agent.inbox.nextTurn.length === 0) return false
+    agent.cancel({ kind: 'user' }, {})
+    for (const text of pending) {
+      agent.followup({
+        id: `tui-${randomUUID()}` as UserMessage['id'], role: 'user', source: { kind: 'user' },
+        content: [{ type: 'text', text }],
+      })
+    }
+    this.patch({ notice: 'Taking over with your message…', error: undefined })
+    return true
+  }
+
   commandChoices(): CommandChoice[] {
     const agent = this.handle?.agent
     const commands = this.ctx.get('commands') as CommandService | undefined
@@ -548,10 +575,43 @@ export class InteractionController {
       if (stored === undefined) throw new Error('Session persistence exposes no readable log')
       summary = { id, ...foldSessionSummary(stored.events) }
     } catch (error) {
-      summary = { id, prompts: 0, unreadable: redactSecrets(errorMessage(error)) }
+      // The strict event read rejected the log (e.g. an interleaved seq run).
+      // The backend's own raw artifact still carries the durable title and
+      // opening prompt, so the picker can show them instead of the bare id.
+      summary = (await this.rescueSummary(id, persistence, signal)) ?? { id, prompts: 0, unreadable: redactSecrets(errorMessage(error)) }
     }
     this.summaries.set(id, summary)
     return summary
+  }
+
+  /**
+   * Fold picker facts straight from the backend's raw artifact text when the
+   * strict logical read fails. Packs chunk rows back into events first, then
+   * reuses the same folding as the normal path; nothing is invented.
+   */
+  private async rescueSummary(id: string, persistence: PersistenceService | undefined, signal?: AbortSignal): Promise<SessionSummary | undefined> {
+    if (persistence?.readRaw === undefined) return undefined
+    try {
+      const raw = await persistence.readRaw(SessionId(id), signal)
+      if (raw === undefined || raw.content === '') return undefined
+      const events: EventLike[] = []
+      for (const line of raw.content.split('\n')) {
+        if (line.trim() === '') continue
+        let record: unknown
+        try { record = JSON.parse(line) } catch { continue }
+        if (typeof record !== 'object' || record === null) continue
+        const item = record as { type?: unknown }
+        if (item.type === 'text-chunks' || item.type === 'reasoning-chunks' || item.type === 'tool-call-chunks') {
+          try { events.push(...decodeStorageRecord(record as never) as unknown as EventLike[]) } catch { continue }
+        } else if (typeof item.type === 'string') {
+          events.push(record as EventLike)
+        }
+      }
+      if (events.length === 0) return undefined
+      return { id, ...foldSessionSummary(events) }
+    } catch {
+      return undefined
+    }
   }
 
   async listModels(): Promise<ModelChoice[]> {
