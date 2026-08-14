@@ -39,7 +39,10 @@ const exit = new Promise(resolveExit => {
     capture += data
     if (!sentQuit && capture.includes('任务完成') && capture.includes('write_file')) {
       sentQuit = true
-      setTimeout(() => terminal.write('q'), 300)
+      setTimeout(() => {
+        terminal.write('\x03')
+        setTimeout(() => terminal.write('\x03'), 200)
+      }, 300)
     }
   })
   terminal.onExit(({ exitCode, signal }) => { clearTimeout(timeout); resolveExit({ exitCode, signal }) })

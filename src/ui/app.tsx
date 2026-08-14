@@ -1,59 +1,404 @@
-import React, { useMemo, useState, useSyncExternalStore } from 'react'
+import React, { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { Box, Text, useApp, useInput, useWindowSize } from 'ink'
 import type { TuiStartupValues } from '../startup.js'
+import {
+  type CommandChoice, InteractionController, type QuestionAnswerItem, type RuntimeSnapshot, type SessionChoice,
+} from '../interaction-controller.js'
 import { TranscriptStore } from '../transcript-store.js'
+import { cursorParts, deleteForward, deleteToEnd, deleteToStart, deleteWord, EMPTY_EDITOR, backspace, insertText, moveCursor, moveCursorTo, type EditorState } from './editor.js'
+import { graphemes } from './display-width.js'
 import { Logo } from './logo.js'
-import { resolveTheme } from './theme.js'
+import { resolveTheme, type Theme } from './theme.js'
 import { TranscriptView } from './transcript-view.js'
 
 export interface ShellProps extends TuiStartupValues {
   store?: TranscriptStore
+  controller?: InteractionController
   sessionId?: string
   model?: string
 }
 
+type Overlay =
+  | { kind: 'commands'; selected: number }
+  | { kind: 'sessions'; selected: number; loading: boolean; items: SessionChoice[] }
+  | { kind: 'permissions'; selected: number; forApproval: boolean }
+  | { kind: 'help' | 'keys' | 'confirm-danger' | 'confirm-new' }
+
+interface QuestionUi {
+  requestId: number
+  index: number
+  option: number
+  selections: Record<string, string[]>
+  customs: Record<string, string>
+  customEditing: boolean
+}
+
 const EMPTY_STORE = new TranscriptStore()
+const READ_ONLY_RUNTIME: RuntimeSnapshot = Object.freeze({
+  sessionId: undefined, cwd: process.cwd(), model: 'model —', agentStatus: 'idle', permission: undefined,
+  theme: 'deep-ocean', notice: undefined, error: undefined, approval: undefined, questions: undefined,
+})
+const noopSubscribe = (): (() => void) => () => {}
+const readOnlySnapshot = (): RuntimeSnapshot => READ_ONLY_RUNTIME
+
+function matchingCommands(items: readonly CommandChoice[], text: string): CommandChoice[] {
+  const query = text.startsWith('/') ? text.slice(1).split(/\s/u, 1)[0]!.toLowerCase() : ''
+  return items.filter(item => item.name.includes(query)).slice(0, 9)
+}
+
+function Panel({ overlay, editor, controller, theme }: { overlay: Overlay; editor: EditorState; controller: InteractionController | undefined; theme: Theme }): React.JSX.Element {
+  if (overlay.kind === 'commands') {
+    const items = matchingCommands(controller?.commandChoices() ?? [], editor.text)
+    return <PanelFrame title="COMMAND SONAR" theme={theme}>{items.length === 0
+      ? <Text color={theme.warning}>No matching command</Text>
+      : items.map((item, index) => <Text key={`${item.source}:${item.name}`} color={index === overlay.selected ? theme.primary : theme.text} bold={index === overlay.selected}>
+          {index === overlay.selected ? '›' : ' '} /{item.name}<Text color={theme.muted}>  [{item.source}] {item.description}{item.inputHint === undefined ? '' : ` · ${item.inputHint}`}</Text>
+        </Text>)}</PanelFrame>
+  }
+  if (overlay.kind === 'sessions') {
+    return <PanelFrame title="SESSION SOUNDINGS" theme={theme}>{overlay.loading
+      ? <Text color={theme.accent}>◌ Reading persisted sessions…</Text>
+      : overlay.items.length === 0 ? <Text color={theme.muted}>No persisted sessions yet</Text>
+        : overlay.items.slice(0, 9).map((item, index) => <Text key={item.id} color={index === overlay.selected ? theme.primary : theme.text} bold={index === overlay.selected}>
+            {index === overlay.selected ? '›' : ' '} {item.id}<Text color={theme.muted}>  {item.cwd ?? 'cwd unknown'} · {new Date(item.createdAt).toLocaleString()}</Text>
+          </Text>)}</PanelFrame>
+  }
+  if (overlay.kind === 'permissions') {
+    const names = controller?.permissionNames() ?? []
+    return <PanelFrame title={overlay.forApproval ? 'ALLOW ONCE + CHANGE PRESET' : 'PERMISSION PRESETS'} theme={theme}>
+      {names.map((name, index) => <Text key={name} color={index === overlay.selected ? theme.primary : theme.text} bold={index === overlay.selected}>
+        {index === overlay.selected ? '›' : ' '} {name}
+      </Text>)}
+    </PanelFrame>
+  }
+  if (overlay.kind === 'confirm-danger') return <PanelFrame title="CONFIRM PERMISSION CHANGE" theme={theme}>
+    <Text color={theme.warning}>danger-full-access changes both sandbox confinement and approval policy.</Text>
+    <Text color={theme.text}>Press <Text bold color={theme.danger}>y</Text> to change it, or <Text bold>n / Esc</Text> to keep the current preset.</Text>
+  </PanelFrame>
+  if (overlay.kind === 'confirm-new') return <PanelFrame title="CONFIRM NEW SESSION" theme={theme}>
+    <Text color={theme.warning}>The active turn will be stopped before a fresh root session is created.</Text>
+    <Text color={theme.text}>Press <Text bold color={theme.primary}>y</Text> to continue, or <Text bold>n / Esc</Text> to stay here.</Text>
+  </PanelFrame>
+  if (overlay.kind === 'keys') return <PanelFrame title="KEYS" theme={theme}>
+    <Text>Enter send · Ctrl+M multiline · Alt+Enter send · Ctrl+L steer</Text>
+    <Text>Ctrl+P commands · Ctrl+S sessions · Shift+Tab permission</Text>
+    <Text>Tab transcript/composer · PgUp/PgDn scroll · Ctrl+C cancel/clear/quit</Text>
+  </PanelFrame>
+  return <PanelFrame title="HELP" theme={theme}>
+    <Text>Type a prompt and press Enter. Start with / to discover dsh and TUI commands.</Text>
+    <Text color={theme.muted}>Blocking approvals use y/n; question cards use arrows, digits, Space, z, Enter.</Text>
+  </PanelFrame>
+}
+
+function PanelFrame({ title, theme, children }: { title: string; theme: Theme; children: React.ReactNode }): React.JSX.Element {
+  return <Box borderStyle="single" borderColor={theme.accent} flexDirection="column" paddingX={1}>
+    <Text bold color={theme.accent}>◇ {title}</Text>{children}
+  </Box>
+}
+
+function ApprovalCard({ runtime, focused, theme }: { runtime: RuntimeSnapshot; focused: boolean; theme: Theme }): React.JSX.Element | null {
+  const request = runtime.approval
+  if (request === undefined) return null
+  return <Box borderStyle="double" borderColor={focused ? theme.warning : theme.border} flexDirection="column" paddingX={1}>
+    <Text bold color={theme.warning}>PERMISSION REQUIRED · {request.toolName}</Text>
+    {request.reason !== undefined && <Text color={theme.text}>{request.reason}</Text>}
+    {request.callId !== undefined && <Text color={theme.muted}>call {request.callId}</Text>}
+    <Text><Text bold color={theme.success}>y / 1 allow once</Text><Text color={theme.muted}>   </Text><Text bold color={theme.danger}>n / 2 reject</Text><Text color={theme.muted}>   3 change preset + allow</Text></Text>
+    {!focused && <Text color={theme.muted}>Parked · Tab returns focus; the request is still pending.</Text>}
+  </Box>
+}
+
+function QuestionCard({ runtime, ui, focused, theme }: { runtime: RuntimeSnapshot; ui: QuestionUi; focused: boolean; theme: Theme }): React.JSX.Element | null {
+  const request = runtime.questions
+  if (request === undefined) return null
+  const question = request.questions[ui.index]
+  if (question === undefined) return null
+  const selected = new Set(ui.selections[question.id] ?? [])
+  return <Box borderStyle="double" borderColor={focused ? theme.primary : theme.border} flexDirection="column" paddingX={1}>
+    <Text bold color={theme.primary}>{question.header ?? 'QUESTION'} · {ui.index + 1}/{request.questions.length}</Text>
+    <Text color={theme.text}>{question.question}</Text>
+    {question.detail !== undefined && <Text color={theme.muted}>{question.detail}</Text>}
+    {question.options.map((option, index) => {
+      const chosen = selected.has(option.label)
+      const approve = question.approve === option.label
+      return <Text key={option.label} color={index === ui.option ? theme.primary : chosen ? theme.success : theme.text} bold={index === ui.option || approve}>
+        {index === ui.option ? '›' : ' '} {index + 1}. {chosen ? '[x]' : '[ ]'} {option.label}{approve ? ' · approve' : ''}<Text color={theme.muted}>{option.description === undefined ? '' : ` — ${option.description}`}</Text>
+      </Text>
+    })}
+    <Text color={ui.customEditing ? theme.primary : theme.muted}>z. Other: {ui.customs[question.id] ?? (ui.customEditing ? '▌' : '')}</Text>
+    {!focused && <Text color={theme.muted}>Parked · Tab returns focus; no answer was fabricated.</Text>}
+  </Box>
+}
+
+function Composer({ editor, focused, runtime, theme }: { editor: EditorState; focused: boolean; runtime: RuntimeSnapshot; theme: Theme }): React.JSX.Element {
+  const parts = cursorParts(editor)
+  const mode = runtime.agentStatus === 'running' ? 'FOLLOW-UP' : 'PROMPT'
+  return <Box borderStyle="single" borderColor={focused ? theme.primary : theme.border} minHeight={editor.multiline ? 6 : 4} paddingX={1} flexDirection="column">
+    <Text><Text bold color={theme.primary}>⌁ {mode}</Text><Text color={theme.muted}> · {editor.multiline ? 'multiline · Alt+Enter sends' : 'Enter sends · Ctrl+M multiline'}</Text></Text>
+    <Text color={theme.text}><Text color={theme.accent}>› </Text>{parts.before}<Text inverse={focused}>{parts.current}</Text>{parts.after}</Text>
+  </Box>
+}
 
 export function Shell(props: ShellProps): React.JSX.Element {
   const { exit } = useApp()
   const { columns = 80, rows = 24 } = useWindowSize()
-  const theme = useMemo(() => resolveTheme(props.theme, props.color), [props.theme, props.color])
-  const store = props.store ?? EMPTY_STORE
+  const controller = props.controller
+  const runtime = useSyncExternalStore(controller?.subscribe ?? noopSubscribe, controller?.getSnapshot ?? readOnlySnapshot, controller?.getSnapshot ?? readOnlySnapshot)
+  const theme = useMemo(() => resolveTheme(runtime.theme ?? props.theme, props.color), [runtime.theme, props.theme, props.color])
+  const store = controller?.transcript ?? props.store ?? EMPTY_STORE
   const state = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot)
+  const [editor, setEditor] = useState<EditorState>(EMPTY_EDITOR)
+  const [history, setHistory] = useState<string[]>([])
+  const [historyIndex, setHistoryIndex] = useState(-1)
+  const [focus, setFocus] = useState<'composer' | 'transcript'>('composer')
   const [scrollOffset, setScrollOffset] = useState(0)
-  const compact = columns < 72 || rows < 22
-  const nodeBudget = Math.max(1, rows - (compact ? 9 : 19))
+  const [overlay, setOverlay] = useState<Overlay | undefined>()
+  const [blockingFocused, setBlockingFocused] = useState(true)
+  const [approvalOption, setApprovalOption] = useState(0)
+  const [quitArmed, setQuitArmed] = useState(false)
+  const [questionUi, setQuestionUi] = useState<QuestionUi>({ requestId: -1, index: 0, option: 0, selections: {}, customs: {}, customEditing: false })
+  const compact = columns < 72 || rows < 28
+  const blockingRows = runtime.approval !== undefined || runtime.questions !== undefined ? 6 : 0
+  const overlayRows = overlay === undefined ? 0 : 7
+  const composerRows = editor.multiline ? 6 : 4
+  const nodeBudget = Math.max(1, rows - (compact ? 7 : 13) - blockingRows - overlayRows - composerRows)
+
+  useEffect(() => {
+    setBlockingFocused(true)
+    setApprovalOption(0)
+  }, [runtime.approval?.id, runtime.questions?.id])
+
+  useEffect(() => {
+    if (runtime.questions !== undefined && runtime.questions.id !== questionUi.requestId) {
+      setQuestionUi({ requestId: runtime.questions.id, index: 0, option: 0, selections: {}, customs: {}, customEditing: false })
+    }
+  }, [runtime.questions?.id, questionUi.requestId])
+
+  const openSessions = (): void => {
+    if (controller === undefined) return
+    setOverlay({ kind: 'sessions', selected: 0, loading: true, items: [] })
+    void controller.listSessions().then(items => setOverlay(current => current?.kind === 'sessions' ? { ...current, loading: false, items } : current)).catch(error => {
+      setOverlay(undefined)
+      void controller.executeCommand(`/session-info`, 'tui')
+      process.stderr.write(`dsh-tui session list: ${error instanceof Error ? error.message : String(error)}\n`)
+    })
+  }
+
+  const runChoice = (choice: CommandChoice): void => {
+    if (controller === undefined) return
+    const line = editor.text.startsWith('/') ? editor.text : `/${choice.name}`
+    setOverlay(undefined)
+    setEditor(EMPTY_EDITOR)
+    void controller.executeCommand(line, choice.source).then(action => {
+      if (action === 'quit') exit()
+      else if (action === 'help' || action === 'keys' || action === 'confirm-danger' || action === 'confirm-new') setOverlay({ kind: action })
+      else if (action === 'sessions') openSessions()
+    })
+  }
+
+  const submitPrompt = (steer = false): void => {
+    if (editor.text.trim() === '') return
+    if (editor.text.startsWith('/')) {
+      const items = matchingCommands(controller?.commandChoices() ?? [], editor.text)
+      if (items.length > 0) runChoice(items[Math.min(overlay?.kind === 'commands' ? overlay.selected : 0, items.length - 1)]!)
+      return
+    }
+    controller?.submit(editor.text, steer)
+    setHistory(items => [...items, editor.text].slice(-100))
+    setHistoryIndex(-1)
+    setEditor(EMPTY_EDITOR)
+    setOverlay(undefined)
+    setScrollOffset(0)
+  }
+
+  const answerCurrentQuestion = (direct?: number, finalizeOnly = false): void => {
+    const request = runtime.questions
+    const question = request?.questions[questionUi.index]
+    if (request === undefined || question === undefined) return
+    const optionIndex = direct ?? questionUi.option
+    const option = question.options[optionIndex]
+    const selections = { ...questionUi.selections }
+    if (!finalizeOnly && option !== undefined) {
+      const current = new Set(selections[question.id] ?? [])
+      if (question.multiSelect) current.has(option.label) ? current.delete(option.label) : current.add(option.label)
+      else { current.clear(); current.add(option.label) }
+      selections[question.id] = [...current]
+    }
+    if (question.multiSelect && !finalizeOnly) {
+      setQuestionUi({ ...questionUi, selections })
+      return
+    }
+    const answered = (item: typeof question): boolean => (selections[item.id]?.length ?? 0) > 0 || (questionUi.customs[item.id]?.trim() ?? '') !== ''
+    if (!question.multiSelect && questionUi.index < request.questions.length - 1) {
+      setQuestionUi({ ...questionUi, selections, index: questionUi.index + 1, option: 0, customEditing: false })
+      return
+    }
+    if (request.questions.every(answered)) {
+      const answers: QuestionAnswerItem[] = request.questions.map(item => ({
+        id: item.id, selected: selections[item.id] ?? [],
+        ...((questionUi.customs[item.id]?.trim() ?? '') === '' ? {} : { custom: questionUi.customs[item.id]!.trim() }),
+      }))
+      controller?.answerQuestions(answers)
+    } else setQuestionUi({ ...questionUi, selections })
+  }
 
   useInput((input, key) => {
-    if (input === 'q' || key.escape || (key.ctrl && input === 'c')) exit()
-    else if (key.pageUp || (key.ctrl && input === 'u')) {
-      setScrollOffset(value => Math.min(Math.max(0, state.nodes.length - 1), value + nodeBudget))
+    if (key.eventType === 'release') return
+    if (quitArmed && !(key.ctrl && input === 'c')) setQuitArmed(false)
+
+    if (runtime.approval !== undefined && blockingFocused && overlay === undefined) {
+      if (key.ctrl && input === 'c') controller?.cancel()
+      else if (input === 'y' || input === '1') controller?.answerApproval('allowed-once')
+      else if (input === 'n' || input === '2') controller?.answerApproval('rejected')
+      else if (input === '3') setOverlay({ kind: 'permissions', selected: 0, forApproval: true })
+      else if (key.upArrow || key.leftArrow || key.shift && key.tab) setApprovalOption(value => (value + 2) % 3)
+      else if (key.downArrow || key.rightArrow || key.tab) setApprovalOption(value => (value + 1) % 3)
+      else if (key.return) approvalOption === 0 ? controller?.answerApproval('allowed-once') : approvalOption === 1 ? controller?.answerApproval('rejected') : setOverlay({ kind: 'permissions', selected: 0, forApproval: true })
+      else if (key.escape) setBlockingFocused(false)
+      return
     }
-    else if (key.pageDown || (key.ctrl && input === 'd')) setScrollOffset(value => Math.max(0, value - nodeBudget))
-    else if (key.end) setScrollOffset(0)
+
+    if (runtime.questions !== undefined && blockingFocused && overlay === undefined) {
+      const question = runtime.questions.questions[questionUi.index]
+      if (question === undefined) return
+      if (key.ctrl && input === 'c') { controller?.cancel(); return }
+      if (questionUi.customEditing) {
+        if (key.escape) setQuestionUi({ ...questionUi, customEditing: false })
+        else if (key.backspace || key.delete) setQuestionUi({ ...questionUi, customs: { ...questionUi.customs, [question.id]: graphemes(questionUi.customs[question.id] ?? '').slice(0, -1).join('') } })
+        else if (key.return) answerCurrentQuestion(undefined, true)
+        else if (!key.ctrl && !key.meta && input !== '') setQuestionUi({ ...questionUi, customs: { ...questionUi.customs, [question.id]: (questionUi.customs[question.id] ?? '') + input } })
+        return
+      }
+      if (key.leftArrow) setQuestionUi({ ...questionUi, index: Math.max(0, questionUi.index - 1), option: 0 })
+      else if (key.rightArrow) setQuestionUi({ ...questionUi, index: Math.min(runtime.questions.questions.length - 1, questionUi.index + 1), option: 0 })
+      else if (key.upArrow || key.shift && key.tab) setQuestionUi({ ...questionUi, option: Math.max(0, questionUi.option - 1) })
+      else if (key.downArrow || key.tab) setQuestionUi({ ...questionUi, option: Math.min(Math.max(0, question.options.length - 1), questionUi.option + 1) })
+      else if (/^[1-9]$/u.test(input)) answerCurrentQuestion(Number(input) - 1)
+      else if (input === ' ' && question.multiSelect) answerCurrentQuestion()
+      else if (input === 'z') setQuestionUi({ ...questionUi, customEditing: true })
+      else if (key.return) answerCurrentQuestion(undefined, question.multiSelect)
+      else if (key.escape) {
+        const selections = { ...questionUi.selections }; delete selections[question.id]
+        if ((questionUi.selections[question.id]?.length ?? 0) > 0) setQuestionUi({ ...questionUi, selections })
+        else setBlockingFocused(false)
+      }
+      return
+    }
+
+    if (overlay !== undefined) {
+      if (overlay.kind === 'commands') {
+        const items = matchingCommands(controller?.commandChoices() ?? [], editor.text)
+        if (key.escape) setOverlay(undefined)
+        else if (key.upArrow) setOverlay({ ...overlay, selected: Math.max(0, overlay.selected - 1) })
+        else if (key.downArrow || key.tab) setOverlay({ ...overlay, selected: Math.min(Math.max(0, items.length - 1), overlay.selected + 1) })
+        else if (key.return && items.length > 0) runChoice(items[Math.min(overlay.selected, items.length - 1)]!)
+        else if (key.backspace) setEditor(value => backspace(value))
+        else if (!key.ctrl && !key.meta && input !== '') setEditor(value => insertText(value, input))
+      } else if (overlay.kind === 'sessions') {
+        if (key.escape) setOverlay(undefined)
+        else if (key.upArrow) setOverlay({ ...overlay, selected: Math.max(0, overlay.selected - 1) })
+        else if (key.downArrow || key.tab) setOverlay({ ...overlay, selected: Math.min(Math.max(0, overlay.items.length - 1), overlay.selected + 1) })
+        else if (key.return && overlay.items[overlay.selected] !== undefined) {
+          const id = overlay.items[overlay.selected]!.id
+          setOverlay(undefined); setEditor(EMPTY_EDITOR); void controller?.switchSession(id)
+        }
+      } else if (overlay.kind === 'permissions') {
+        const names = controller?.permissionNames() ?? []
+        if (key.escape) setOverlay(undefined)
+        else if (key.upArrow) setOverlay({ ...overlay, selected: Math.max(0, overlay.selected - 1) })
+        else if (key.downArrow || key.tab) setOverlay({ ...overlay, selected: Math.min(Math.max(0, names.length - 1), overlay.selected + 1) })
+        else if (key.return && names[overlay.selected] !== undefined) {
+          const ok = overlay.forApproval ? controller?.answerApprovalWithPreset(names[overlay.selected]!) : controller?.selectPermission(names[overlay.selected]!)
+          if (ok !== false) setOverlay(undefined)
+        }
+      } else if (overlay.kind === 'confirm-danger') {
+        if (input === 'y') { controller?.selectPermission('danger-full-access'); setOverlay(undefined) }
+        else if (input === 'n' || key.escape) setOverlay(undefined)
+      } else if (overlay.kind === 'confirm-new') {
+        if (input === 'y') { setOverlay(undefined); setEditor(EMPTY_EDITOR); void controller?.switchSession() }
+        else if (input === 'n' || key.escape) setOverlay(undefined)
+      } else if (key.escape || key.return) setOverlay(undefined)
+      return
+    }
+
+    if (key.ctrl && input === 'p' || input === '?' && editor.text === '') { setEditor({ ...EMPTY_EDITOR, text: '/', cursor: 1 }); setOverlay({ kind: 'commands', selected: 0 }); return }
+    if (key.ctrl && input === 's') { openSessions(); return }
+    if (key.ctrl && input === 'x') { setOverlay({ kind: 'keys' }); return }
+    if (key.shift && key.tab) { controller?.cyclePermission(); return }
+    if (key.tab) {
+      if (!blockingFocused && (runtime.approval !== undefined || runtime.questions !== undefined)) setBlockingFocused(true)
+      else setFocus(value => value === 'composer' ? 'transcript' : 'composer')
+      return
+    }
+    if (key.ctrl && input === 'c') {
+      if (controller?.cancel() === true) return
+      if (editor.text !== '') { setEditor(EMPTY_EDITOR); return }
+      if (quitArmed) exit()
+      else setQuitArmed(true)
+      return
+    }
+    if (focus === 'transcript') {
+      if (key.pageUp || key.upArrow || key.ctrl && input === 'u') setScrollOffset(value => Math.min(Math.max(0, state.nodes.length - 1), value + nodeBudget))
+      else if (key.pageDown || key.downArrow || key.ctrl && input === 'd') setScrollOffset(value => Math.max(0, value - nodeBudget))
+      else if (key.end) setScrollOffset(0)
+      else if (key.escape) setFocus('composer')
+      return
+    }
+    if (key.ctrl && input === 'm') { setEditor(value => ({ ...value, multiline: !value.multiline })); return }
+    if (key.ctrl && input === 'l') { submitPrompt(true); return }
+    if (key.ctrl && input === 'w') { setEditor(value => deleteWord(value)); return }
+    if (key.ctrl && input === 'u') { setEditor(value => deleteToStart(value)); return }
+    if (key.ctrl && input === 'k') { setEditor(value => deleteToEnd(value)); return }
+    if (key.leftArrow) setEditor(value => moveCursor(value, -1))
+    else if (key.rightArrow) setEditor(value => moveCursor(value, 1))
+    else if (key.home) setEditor(value => moveCursorTo(value, 'start'))
+    else if (key.end) setEditor(value => moveCursorTo(value, 'end'))
+    else if (key.backspace) setEditor(value => backspace(value))
+    else if (key.delete) setEditor(value => deleteForward(value))
+    else if (key.upArrow && editor.text === '' && history.length > 0) {
+      const next = Math.min(history.length - 1, historyIndex + 1); setHistoryIndex(next)
+      const text = history[history.length - 1 - next]!; setEditor({ ...EMPTY_EDITOR, text, cursor: graphemes(text).length })
+    } else if (key.downArrow && editor.text === '' && historyIndex >= 0) {
+      const next = historyIndex - 1; setHistoryIndex(next)
+      const text = next < 0 ? '' : history[history.length - 1 - next]!; setEditor({ ...EMPTY_EDITOR, text, cursor: graphemes(text).length })
+    } else if (key.return) {
+      if (editor.multiline && !key.meta) setEditor(value => insertText(value, '\n'))
+      else submitPrompt(false)
+    } else if (!key.ctrl && !key.meta && input !== '') {
+      const opensCommands = editor.text === '' && input.startsWith('/')
+      setEditor(value => insertText(value, input))
+      if (opensCommands) setOverlay({ kind: 'commands', selected: 0 })
+    }
   })
 
   return (
     <Box width={columns} height={rows} flexDirection="column" backgroundColor={theme.canvas}>
-      <Box paddingX={2} paddingTop={compact ? 0 : 1} alignItems="center">
+      <Box paddingX={2} paddingTop={compact ? 0 : 1} alignItems="center" flexShrink={0}>
         {!compact && state.nodes.length === 0 && <Logo theme={theme} monochrome={props.color === 'none'} />}
         <Box marginLeft={!compact && state.nodes.length === 0 ? 3 : 0} flexDirection="column">
           <Text bold color={theme.text}>DEEPSEEK / HARNESS</Text>
-          <Text color={theme.accent}>TUI event console</Text>
-          <Text color={theme.muted}>M2 renderer · streaming / tools / diffs</Text>
+          {!compact && <Text color={theme.accent}>TUI event console</Text>}
+          {!compact && <Text color={theme.muted}>M3 interaction · prompt / approval / resume</Text>}
         </Box>
       </Box>
 
-      <Box marginX={2} marginTop={1} borderStyle="single" borderColor={theme.border} flexDirection="column" flexGrow={1} paddingX={1} overflow="hidden">
+      <Box marginX={2} marginTop={1} borderStyle="single" borderColor={focus === 'transcript' ? theme.primary : theme.border} flexDirection="column" flexGrow={1} paddingX={1} overflow="hidden">
         <Box><Text color={theme.primary}>◆ </Text><Text bold color={theme.text}>TRANSCRIPT</Text><Text color={theme.muted}>  seq {state.lastSeq < 0 ? '—' : state.lastSeq}{state.gap === undefined ? '' : ` · resnapshot ${state.gap.expected}→${state.gap.received}`}</Text></Box>
         <Box marginTop={1} flexDirection="column" overflow="hidden">
           <TranscriptView state={state} width={Math.max(10, columns - 8)} nodeBudget={nodeBudget} offset={Math.max(0, scrollOffset)} theme={theme} />
         </Box>
       </Box>
 
-      <Box paddingX={2} justifyContent="space-between">
-        <Text color={theme.muted}>{props.model ?? 'model —'}  session {props.sessionId ?? props.resume ?? 'new'}  cwd {process.cwd()}</Text>
-        <Text color={theme.accent}>PgUp/PgDn scroll  q/esc quit</Text>
+      <Box marginX={2} flexDirection="column" flexShrink={0}>
+        <ApprovalCard runtime={runtime} focused={blockingFocused} theme={theme} />
+        <QuestionCard runtime={runtime} ui={questionUi} focused={blockingFocused} theme={theme} />
+        {overlay !== undefined && <Panel overlay={overlay} editor={editor} controller={controller} theme={theme} />}
+        <Composer editor={editor} focused={focus === 'composer' && blockingFocused} runtime={runtime} theme={theme} />
+      </Box>
+
+      <Box paddingX={2} justifyContent="space-between" flexShrink={0}>
+        <Text color={runtime.error === undefined ? theme.muted : theme.danger}>{runtime.error ?? runtime.notice ?? `${runtime.model} · ${runtime.agentStatus}`}</Text>
+        <Text color={quitArmed ? theme.warning : theme.accent}>{quitArmed ? 'Ctrl+C again to quit' : `${runtime.permission ?? 'permission —'} · ${runtime.sessionId ?? props.sessionId ?? props.resume ?? 'new'}`}</Text>
       </Box>
     </Box>
   )

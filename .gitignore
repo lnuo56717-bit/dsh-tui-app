@@ -9,6 +9,9 @@ coverage/
 .m1-tools/
 .m2-home/
 .m2-results/
+.m3-ac4-home/
+.m3-ac5-home/
+.m3-results/
 assets/generated/
 *.tgz
 *.log

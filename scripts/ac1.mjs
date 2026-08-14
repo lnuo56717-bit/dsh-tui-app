@@ -45,7 +45,10 @@ const exit = new Promise(resolveExit => {
     capture += data
     if (!sentQuit && (capture.includes('DEEPSEEK / HARNESS') || capture.includes('TRANSCRIPT'))) {
       sentQuit = true
-      setTimeout(() => terminal.write('q'), 150)
+      setTimeout(() => {
+        terminal.write('\x03')
+        setTimeout(() => terminal.write('\x03'), 200)
+      }, 150)
     }
   })
   terminal.onExit(({ exitCode, signal }) => {

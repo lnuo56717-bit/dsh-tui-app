@@ -1,6 +1,6 @@
 # dsh-tui-app
 
-An out-of-tree, same-process full-screen TUI bundle for DeepSeek Harness. The M2 build renders the durable session event stream as streaming Markdown, nested tool/workflow trees, file diffs, activities, and forward-compatible raw event placeholders. It keeps the Chafa-generated DeepSeek whale as the single visual signature.
+An out-of-tree, same-process full-screen TUI bundle for DeepSeek Harness. The M3 build adds a grapheme-safe composer, dsh/local slash-command discovery, approval and question cards, permission presets, and durable session resume/switching to the M2 event renderer. The Chafa-generated DeepSeek whale remains the single visual signature.
 
 ## Requirements
 
@@ -17,20 +17,29 @@ npm run build
 dsh plugin --profile tui add "C:\absolute\path\to\dsh-tui-app"
 dsh --profile tui --help
 dsh --profile tui
+dsh --profile tui --resume <session-id>
 ```
 
 `dsh plugin` initializes the `tui` profile with `@deepseek-ai/dsh-base`, installs this local bundle out of tree, and appends `dsh-tui-app` to the profile bundle list. It does not change Harness source.
 
-Flags are `--resume`, `--theme`, and `--color`; `--resume` is parsed but intentionally deferred to M3.
+Flags are `--resume`, `--theme`, and `--color`. `--resume` loads durable history through `agents.resume`; it does not reconstruct transcript text from projections.
 
 ## Keys
 
-| Key | M2 action |
+| Key | M3 action |
 |---|---|
-| `PgUp` / `Ctrl+U` | scroll toward older transcript nodes |
-| `PgDn` / `Ctrl+D` | scroll toward newer transcript nodes |
-| `End` | return to the live edge |
-| `q` / `Esc` / `Ctrl+C` | exit and restore the terminal |
+| `Enter` | send a prompt or queued follow-up |
+| `Ctrl+M` / `Alt+Enter` | toggle multiline / send multiline |
+| `Ctrl+L` | steer the current or next step |
+| `Ctrl+P` / `?` | open command sonar |
+| `Ctrl+S` | open persisted session picker |
+| `Shift+Tab` | cycle advertised permission presets |
+| `Tab` | move between composer, blocking card, and scrollback |
+| `PgUp` / `PgDn` | page transcript scrollback |
+| `Ctrl+X` | show key reference |
+| `Ctrl+C` | cancel running turn; clear draft; press twice on idle/empty to quit |
+
+Approval cards accept `y`/`1` (allow once), `n`/`2` (reject), or `3` (change preset, then allow once). Question cards use arrows, digits, Space for multi-select, `z` for free text, and Enter to advance/submit. Esc parks a blocking card without fabricating an answer.
 
 ## Development
 
@@ -39,21 +48,27 @@ npm run check
 npm test
 npm run test:ac
 npm run test:ac:m2
+npm run test:ac:m3
 ```
 
 The colored whale is generated at build time from the official DeepSeek GitHub avatar using Chafa 1.18.2. See `NOTICE` and `PROVENANCE.md`. Chafa is not a runtime dependency.
 
-## M2 behavior
+## M3 behavior
 
 - The transcript subscribes before reading the immutable session snapshot, buffers the live edge, de-duplicates by `seq`, and requests a re-snapshot on a gap.
 - Assistant chunks reconcile in place and are superseded by the committed assistant message without a duplicate frame.
 - Markdown is tokenized without executing HTML. CJK wrapping and clipping operate on grapheme clusters and terminal display cells.
 - Tool calls/results, Code Mode children, diffs, workflows, and selected runtime activities render as compact trees.
 - Unknown future events render once as raw placeholders instead of crashing the process.
+- Human input becomes a real identified `UserMessage` and enters through `agent.followup` or the explicit `agent.steer` action; the UI never appends chat events itself.
+- The slash menu keeps dsh and local descriptors separate when names collide. Advertised dsh commands execute through the command registry and retain durable run/done events.
+- Approval outcomes are fail-closed and limited to the upstream vocabulary. Preset escalation changes the real permission service before allowing the current request.
+- Session switching detaches the old transcript, disposes the owned handle, and resumes exactly one selected persisted root.
 
-## M2 limitations
+## M3 limitations
 
-- Composer editing, slash commands, approvals, questions, and session switching/resume belong to M3 and are not implemented here.
 - Reasoning is intentionally collapsed to a one-line disclosure in this milestone.
-- Mouse support, transcript search, and multi-session awareness remain P2.
+- `@` remains plain text because rc.6 exposes no host-safe general attachment picker seam.
+- Projection-rich status details, final theme polish, and exhaustive 80×24 CJK QA are M4 work.
+- Mouse support, transcript search, and multi-root awareness remain P2.
 - This independent project is not affiliated with or endorsed by DeepSeek.

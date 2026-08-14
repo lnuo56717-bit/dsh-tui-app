@@ -1,6 +1,6 @@
 {
   "name": "dsh-tui-app",
-  "version": "0.1.0-m2",
+  "version": "0.1.0-m3",
   "description": "Out-of-tree full-screen Ink app bundle for DeepSeek Harness",
   "private": true,
   "type": "module",
@@ -38,8 +38,10 @@
     "test": "vitest run",
     "test:m1": "vitest run tests/m1",
     "test:m2": "vitest run tests/m2",
+    "test:m3": "vitest run tests/m3",
     "test:ac": "node scripts/ac1.mjs && node scripts/ac2.mjs",
-    "test:ac:m2": "vitest run tests/m2 && node scripts/ac3.mjs"
+    "test:ac:m2": "vitest run tests/m2 && node scripts/ac3.mjs",
+    "test:ac:m3": "vitest run tests/m3 && node scripts/ac4.mjs && node scripts/ac5.mjs"
   },
   "dependencies": {
     "@deepseek-ai/dsh-cmdline": "0.1.0-rc.6",

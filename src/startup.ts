@@ -26,15 +26,19 @@ export function tuiCommand(): Command {
     .name('dsh --profile tui')
     .description('Launch the DeepSeek Harness full-screen terminal interface.')
     .helpOption('-h, --help', 'show TUI help')
-    .option('--resume <session-id>', 'resume a durable session (wired in M3)')
+    .option('--resume <session-id>', 'resume a durable session')
     .addOption(new Option('--theme <name>', 'select a TUI theme').choices(['deep-ocean', 'mono']).default('deep-ocean'))
     .addOption(new Option('--color <mode>', 'force terminal color capability').choices(['auto', 'truecolor', '256', '16', 'none']).default('auto'))
     .addHelpText('after', `
-M1 controls:
-  q, Esc, Ctrl+C   leave the full-screen shell
+M3 controls:
+  Enter             send prompt
+  Ctrl+P, Ctrl+S    commands, sessions
+  Ctrl+M, Alt+Enter multiline, send multiline
+  Ctrl+C            cancel, clear, then confirm quit
 
 Examples:
   dsh --profile tui
+  dsh --profile tui --resume <session-id>
   dsh --profile tui --theme mono --color none
 `)
 }

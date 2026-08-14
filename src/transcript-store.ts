@@ -46,8 +46,7 @@ export interface AttachedTranscript {
 }
 
 /** Listener-first snapshot handoff from EVENT-SPEC section 6. */
-export function attachTranscript(ctx: Context, session: Session): AttachedTranscript {
-  const store = new TranscriptStore()
+export function attachTranscript(ctx: Context, session: Session, store = new TranscriptStore()): AttachedTranscript {
   let initialized = false
   const buffered: SessionEvent[] = []
 
