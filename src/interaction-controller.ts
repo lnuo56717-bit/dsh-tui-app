@@ -258,6 +258,7 @@ export class InteractionController {
   private readonly summaries = new Map<string, SessionSummary>()
   private requestSeq = 0
   private modelOperation = 0
+  private takeOverSeq = 0
   private defaultSaveChain: Promise<void> = Promise.resolve()
   private accepting = false
 
@@ -438,33 +439,44 @@ export class InteractionController {
   cancel(keepInbox = false): boolean {
     const agent = this.handle?.agent
     if (agent?.status !== 'running') return false
+    this.takeOverSeq += 1
     agent.cancel({ kind: 'user' }, keepInbox ? { keepInbox: true } : {})
     this.patch({ notice: keepInbox ? 'Taking over with your message…' : 'Cancelling active turn…' })
     return true
   }
 
   /**
-   * Double-Enter interject: Enter queued one or more drafts, the take-over
-   * gesture aborts the turn and re-sends every draft. The wake must arrive
-   * AFTER the abort so the harness latches it against the converging phase —
-   * a plain `cancel(keepInbox)` keeps the parked message but never wakes the
-   * driver. When the drafts were already claimed by a converged turn there is
-   * nothing to take over and this returns false without duplicating them.
+   * Double-Enter interject: abort the in-flight turn, then re-issue the
+   * queued drafts once the driver is actually idle. Calling `followup`
+   * on the same stack as `cancel` re-enters the harness mid-convergence
+   * and can freeze the process. `keepInbox` is not used: cancel would
+   * keep the parked messages but never wake the driver.
    */
   takeOver(texts: readonly string[]): boolean {
     const agent = this.handle?.agent
+    const handle = this.handle
     const pending = texts.map(item => item.trim()).filter(item => item !== '')
-    if (agent === undefined || pending.length === 0) return false
+    if (agent === undefined || handle === undefined || pending.length === 0) return false
     if (agent.status !== 'running') return false
-    if (agent.inbox.nextTurn.length === 0) return false
+    const seq = ++this.takeOverSeq
     agent.cancel({ kind: 'user' }, {})
-    for (const text of pending) {
-      agent.followup({
-        id: `tui-${randomUUID()}` as UserMessage['id'], role: 'user', source: { kind: 'user' },
-        content: [{ type: 'text', text }],
-      })
-    }
     this.patch({ notice: 'Taking over with your message…', error: undefined })
+    // Leave the cancel stack before waiting or waking. Same-stack followup
+    // re-enters the harness and can freeze the process.
+    queueMicrotask(() => {
+      if (seq !== this.takeOverSeq || this.handle !== handle) return
+      void agent.whenIdle().then(() => {
+        if (seq !== this.takeOverSeq || this.handle !== handle || this.handle.agent !== agent) return
+        if (agent.status === 'running') return
+        for (const text of pending) {
+          agent.followup({
+            id: `tui-${randomUUID()}` as UserMessage['id'], role: 'user', source: { kind: 'user' },
+            content: [{ type: 'text', text }],
+          })
+        }
+        this.patch({ agentStatus: agent.status, notice: 'Taking over with your message…', error: undefined })
+      })
+    })
     return true
   }
 
@@ -893,6 +905,7 @@ export class InteractionController {
   async dispose(): Promise<void> {
     this.accepting = false
     this.modelOperation += 1
+    this.takeOverSeq += 1
     this.settleBlocking('unavailable')
     await Promise.resolve()
     this.questionProviderDispose?.()

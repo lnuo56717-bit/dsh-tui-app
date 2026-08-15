@@ -183,6 +183,23 @@ describe('interrupting a running turn', () => {
     }
   })
 
+  it('Esc closes the command palette without stopping the running turn', { timeout: 8_000 }, async () => {
+    const app = harness('running')
+    try {
+      await untilFrame(app, 'FOLLOW-UP')
+      app.stdin.write('/')
+      await untilFrame(app, 'COMMAND SONAR')
+      app.stdin.write('\u001B')
+      await untilFrame(app, 'FOLLOW-UP')
+      await settle()
+      expect(app.calls.cancels).toBe(0)
+      expect(app.calls.takeOvers).toBe(0)
+      expect(app.frame()).not.toContain('COMMAND SONAR')
+    } finally {
+      app.instance.unmount()
+    }
+  })
+
   it('Esc stays inert when nothing is running', async () => {
     const app = harness('idle')
     try {

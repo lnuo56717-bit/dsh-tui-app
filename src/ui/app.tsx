@@ -856,25 +856,13 @@ export function Shell(props: ShellProps): React.JSX.Element {
       return
     }
 
-    // Grok's simple-mode policy: a running turn swallows Esc. When drafts were
-    // sent and not yet taken over, Esc takes over with them; otherwise it is
-    // the plain stop.
-    if (key.escape && runtime.agentStatus === 'running') {
-      if (lastSentAt.current !== 0) {
-        controller?.takeOver(lastSentTexts.current)
-        lastSentTexts.current = []
-      } else {
-        controller?.cancel()
-      }
-      lastSentAt.current = 0
-      setStopArmed(false)
-      return
-    }
-
     if (overlay !== undefined) {
       if (overlay.kind === 'commands') {
         const items = matchingCommands(controller?.commandChoices() ?? [], editor.text).slice(0, panelMaxItems)
-        if (key.escape) setOverlay(undefined)
+        if (key.escape) {
+          setOverlay(undefined)
+          if (editor.text.startsWith('/')) setEditor(EMPTY_EDITOR)
+        }
         else if (key.upArrow) setOverlay({ ...overlay, selected: Math.max(0, overlay.selected - 1) })
         else if (key.downArrow || key.tab) setOverlay({ ...overlay, selected: Math.min(Math.max(0, items.length - 1), overlay.selected + 1) })
         else if (key.return && items.length > 0) runChoice(items[Math.min(overlay.selected, items.length - 1)]!)
@@ -922,6 +910,20 @@ export function Shell(props: ShellProps): React.JSX.Element {
         if (input === 'y') { setOverlay(undefined); setEditor(EMPTY_EDITOR); void controller?.switchSession() }
         else if (input === 'n' || key.escape) setOverlay(undefined)
       } else if (key.escape || key.return) setOverlay(undefined)
+      return
+    }
+
+    // Overlays already consumed Esc above. A running turn swallows Esc only
+    // when nothing modal is open: take over if a draft was queued, else stop.
+    if (key.escape && runtime.agentStatus === 'running') {
+      if (lastSentAt.current !== 0) {
+        controller?.takeOver(lastSentTexts.current)
+        lastSentTexts.current = []
+      } else {
+        controller?.cancel()
+      }
+      lastSentAt.current = 0
+      setStopArmed(false)
       return
     }
 

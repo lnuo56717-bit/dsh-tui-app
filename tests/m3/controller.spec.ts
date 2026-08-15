@@ -10,6 +10,7 @@ function fixture() {
   const handlers = new Map<string, Handler[]>()
   const followups: UserMessage[] = []
   const steers: UserMessage[] = []
+  const cancels: number[] = []
   const resumed: string[] = []
   let questionProvider: { ask(request: any): Promise<any> } | undefined
 
@@ -29,10 +30,14 @@ function fixture() {
       get events() { return events }, get seq() { return events.length },
     }
     const agent = {
-      id: SessionId(id), session, ctx, status: 'idle', options: { provider: 'mock', model: 'whale' }, inbox: {},
+      id: SessionId(id), session, ctx, status: 'idle' as 'idle' | 'running',
+      options: { provider: 'mock', model: 'whale' }, inbox: { nextTurn: [] as UserMessage[] },
       followup(message: UserMessage) { followups.push(message) },
       steer(message: UserMessage) { steers.push(message) },
-      send() {}, inject() {}, cancel() {}, async whenIdle() {}, runMaintenance: async <T>(task: (signal: AbortSignal) => Promise<T>) => task(new AbortController().signal),
+      send() {}, inject() {},
+      cancel() { cancels.push(Date.now()); this.status = 'idle' },
+      async whenIdle() {},
+      runMaintenance: async <T>(task: (signal: AbortSignal) => Promise<T>) => task(new AbortController().signal),
     } as unknown as Agent
     await setup?.(ctx)
     return { agent, async dispose() {} }
@@ -51,7 +56,7 @@ function fixture() {
     sessionTitle: { rename() {} },
   }
 
-  return { ctx, handlers, followups, steers, resumed, get questionProvider() { return questionProvider } }
+  return { ctx, handlers, followups, steers, cancels, resumed, get questionProvider() { return questionProvider } }
 }
 
 describe('M3 interaction controller', () => {
@@ -94,4 +99,24 @@ describe('M3 interaction controller', () => {
     expect(fx.resumed).toEqual(['session-existing', 'session-next'])
     await controller.dispose()
   })
+
+  it('defers take-over follow-ups until the cancelled driver is idle', async () => {
+    const fx = fixture()
+    const controller = new InteractionController(fx.ctx, 'abyss')
+    await controller.start()
+    const agent = (controller as unknown as { handle: { agent: Agent & { status: 'idle' | 'running'; whenIdle: () => Promise<void> } } }).handle.agent
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    agent.whenIdle = () => gate
+    agent.status = 'running'
+    expect(controller.takeOver(['接管中文'])).toBe(true)
+    expect(fx.cancels).toHaveLength(1)
+    expect(fx.followups).toHaveLength(0)
+    release()
+    await Promise.resolve()
+    await gate
+    await Promise.resolve()
+    expect(fx.followups.map(item => item.content)).toEqual([[{ type: 'text', text: '接管中文' }]])
+    await controller.dispose()
+  }, 5_000)
 })
