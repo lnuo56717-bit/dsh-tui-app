@@ -16,7 +16,7 @@ import { sessionDetail, sessionLabel, sessionMeta } from './session-picker.js'
 import { resolveTheme, type Theme } from './theme.js'
 import { presentReasoning } from './reasoning-view.js'
 import { transcriptRows, type TranscriptRow } from './transcript-rows.js'
-import { elapsedLabel, settledTiming } from './timing.js'
+import { elapsedLabel, settledTiming, SPIN_TICK_MS, THINKING_REST_GLYPH, thinkingFrame } from './timing.js'
 import { composerCaret } from './cursor.js'
 import { terminalSequences } from './terminal.js'
 import { focusableBlocks, ReasoningDetailView, TranscriptView, viewportWindow, type RowSelection, type TranscriptBlockRef } from './transcript-view.js'
@@ -62,8 +62,6 @@ const WHEEL_ROWS = 3
 const SESSION_ROWS = 7
 /** Two Enters inside this window stop the running turn (the Grok double-Enter interject). */
 const DOUBLE_ENTER_MS = 900
-/** Repaint cadence of the running task's elapsed seconds; the chip reads in whole seconds. */
-const TIMER_TICK_MS = 1_000
 
 export function borderStyleForWidth(columns: number): 'classic' | 'single' {
   return columns < 60 ? 'classic' : 'single'
@@ -294,7 +292,7 @@ export function Shell(props: ShellProps): React.JSX.Element {
   const [reasoningDetail, setReasoningDetail] = useState<{ key: string; offset: number; follow: boolean } | undefined>()
   const [summaries, setSummaries] = useState<Record<string, SessionSummary>>({})
   const [mouseTracking, setMouseTracking] = useState(true)
-  /** Ticks only while a turn is open, so an idle TUI repaints on events alone. */
+  /** Ticks only while the agent is running, so an idle TUI repaints on events alone. */
   const [clock, setClock] = useState(() => Date.now())
   const catalogRequest = useRef(0)
   const rowTotal = useRef(0)
@@ -337,13 +335,19 @@ export function Shell(props: ShellProps): React.JSX.Element {
   const thoughts = useMemo(() => blocks.filter(item => item.kind === 'reasoning'), [blocks])
   const focusedBlock = blocks.find(item => item.key === focusedBlockKey)
   const detailItem = reasoningDetail === undefined ? undefined : thoughts.find(item => item.key === reasoningDetail.key)
+  // The log's open turn is the task being timed. Requiring a running agent too
+  // means a turn left open by a failure parks the chip on its settled facts
+  // instead of counting up forever.
+  const turnRunning = state.timing.open !== undefined && runtime.agentStatus === 'running'
+  const live = runtime.agentStatus === 'running'
+  const thinkingGlyph = live ? thinkingFrame(clock) : THINKING_REST_GLYPH
   const transcript = useMemo(() => transcriptRows(state, {
     width: rowWidth,
     compact,
     expandedBlocks,
     focusedBlockKey: focus === 'transcript' ? focusedBlockKey : undefined,
-    thinkingGlyph: '◌',
-  }), [state, rowWidth, compact, expandedBlocks, focusedBlockKey, focus])
+    thinkingGlyph,
+  }), [state, rowWidth, compact, expandedBlocks, focusedBlockKey, focus, thinkingGlyph])
   const maxScroll = Math.max(0, transcript.length - viewportRows)
   const scroll = Math.min(Math.max(0, scrollOffset), maxScroll)
   const composerWidth = Math.max(10, columns - margin * 2 - 4)
@@ -374,11 +378,6 @@ export function Shell(props: ShellProps): React.JSX.Element {
   // the cursor suffix — the IME composition lands above the caret.
   const panelBudget = Math.max(1, rows - (compact ? 7 : 12 + whaleExtra) - blockingRows - composerHeight)
   const panelMaxItems = Math.max(1, panelBudget - 3)
-  // The log's open turn is the task being timed. Requiring a running agent too
-  // means a turn left open by a failure parks the chip on its settled facts
-  // instead of counting up forever.
-  const turnRunning = state.timing.open !== undefined && runtime.agentStatus === 'running'
-
   useEffect(() => {
     setBlockingFocused(true)
     setApprovalOption(0)
@@ -407,15 +406,15 @@ export function Shell(props: ShellProps): React.JSX.Element {
     if (grew > 0) setScrollOffset(value => value > 0 ? value + grew : 0)
   }, [transcript.length])
 
-  // The elapsed chip advances on its own clock while the task runs; when the
-  // turn closes the interval stops and the chip reads the logged spans, which
-  // no longer move.
+  // One live clock drives the width-1 spinner and the elapsed chip. The chip
+  // still floors to whole seconds; the interval stops the moment the agent
+  // goes idle.
   useEffect(() => {
-    if (!turnRunning) return
+    if (!live) return
     setClock(Date.now())
-    const timer = setInterval(() => setClock(Date.now()), TIMER_TICK_MS)
+    const timer = setInterval(() => setClock(Date.now()), SPIN_TICK_MS)
     return () => { clearInterval(timer) }
-  }, [turnRunning])
+  }, [live])
 
   useEffect(() => () => { clearTimeout(wheelBurst.current.historyTimer); clearTimeout(stopTimer.current) }, [])
 
@@ -1133,7 +1132,7 @@ export function Shell(props: ShellProps): React.JSX.Element {
         <Box marginTop={compact ? 0 : 1} flexDirection="column" flexGrow={1} justifyContent="flex-end" overflow="hidden">
           {detailItem === undefined
             ? <TranscriptView rows={transcript} viewport={viewportRows} offset={scroll} theme={theme} plain={veryNarrow} selection={transcriptSel} />
-            : <ReasoningDetailView item={detailItem} width={transcriptWidth} rows={viewportRows} offset={reasoningDetail?.offset ?? 0} theme={theme} />}
+            : <ReasoningDetailView item={detailItem} width={transcriptWidth} rows={viewportRows} offset={reasoningDetail?.offset ?? 0} theme={theme} thinkingGlyph={thinkingGlyph} />}
         </Box>
       </Box>
 

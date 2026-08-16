@@ -3,6 +3,28 @@ import type { TurnTiming } from '../transcript-fold.js'
 /** Marks the elapsed-time chip in the chrome; width-1 like the rest of the geometry set. */
 export const TIMER_GLYPH = '◷'
 
+/** Idle / settled thinking mark. Same width as every spin frame. */
+export const THINKING_REST_GLYPH = '◌'
+
+/**
+ * Grok Build's circling-dot frames: a one-cell braille comet that travels
+ * around the glyph. Each frame is one display cell so a tick cannot reflow
+ * a row or shift the caret.
+ */
+export const SPIN_FRAMES = [...'⠁⠁⠉⠙⠚⠒⠂⠂⠒⠲⠴⠤⠄⠄⠤⠠⠠⠤⠦⠖⠒⠐⠐⠒⠓⠋⠉⠈⠈'] as const
+
+/** How often the live spinner advances. Matches Grok's cadence; the elapsed chip still floors to seconds. */
+export const SPIN_TICK_MS = 80
+
+/**
+ * The spinner frame for `now`. Derived from the clock, not from view state, so
+ * a given timestamp always paints the same glyph.
+ */
+export function thinkingFrame(now: number): string {
+  const index = Math.floor(Math.max(0, now) / SPIN_TICK_MS) % SPIN_FRAMES.length
+  return SPIN_FRAMES[index]!
+}
+
 /**
  * Stopwatch reading of a span: whole seconds, then minutes, then hours. Floored
  * rather than rounded, so a live counter never reads ahead of the clock.

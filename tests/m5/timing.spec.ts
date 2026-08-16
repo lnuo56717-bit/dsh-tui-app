@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { EMPTY_TRANSCRIPT, foldEvents, foldTranscript, NO_TIMING, type EventLike } from '../../src/transcript-fold.js'
-import { elapsedFacts, elapsedLabel, formatElapsed, settledTiming } from '../../src/ui/timing.js'
+import { displayWidth } from '../../src/ui/display-width.js'
+import { elapsedFacts, elapsedLabel, formatElapsed, settledTiming, SPIN_FRAMES, SPIN_TICK_MS, THINKING_REST_GLYPH, thinkingFrame } from '../../src/ui/timing.js'
 
 const T0 = 1_700_000_000_000
 
@@ -91,5 +92,21 @@ describe('task timing measured from the log', () => {
     const first = foldEvents([turn(0, 'turn/start', 1, T0)])
     expect(elapsedLabel(first.timing, T0 + 8_400)).toBe('◷ 8s')
     expect(elapsedLabel(NO_TIMING, T0)).toBeUndefined()
+  })
+})
+
+describe('the live thinking spinner', () => {
+  it('cycles Grok\'s width-1 circling-dot frames and is deterministic', () => {
+    expect(SPIN_FRAMES.join('')).toBe('⠁⠁⠉⠙⠚⠒⠂⠂⠒⠲⠴⠤⠄⠄⠤⠠⠠⠤⠦⠖⠒⠐⠐⠒⠓⠋⠉⠈⠈')
+    expect(SPIN_FRAMES).toHaveLength(29)
+    expect(thinkingFrame(0)).toBe('⠁')
+    expect(thinkingFrame(SPIN_TICK_MS - 1)).toBe('⠁')
+    expect(thinkingFrame(SPIN_TICK_MS)).toBe('⠁')
+    expect(thinkingFrame(SPIN_TICK_MS * 2)).toBe('⠉')
+    expect(thinkingFrame(SPIN_TICK_MS * 29)).toBe('⠁')
+    expect(thinkingFrame(SPIN_TICK_MS)).toBe(thinkingFrame(SPIN_TICK_MS))
+    expect(thinkingFrame(-50)).toBe('⠁')
+    expect(displayWidth(THINKING_REST_GLYPH)).toBe(1)
+    for (const glyph of SPIN_FRAMES) expect(displayWidth(glyph)).toBe(1)
   })
 })

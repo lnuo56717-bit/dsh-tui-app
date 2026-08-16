@@ -3,6 +3,7 @@ import { displayWidth, graphemes, takeCells } from './display-width.js'
 import { markdownToLines, type SegmentTone } from './markdown.js'
 import { presentReasoning } from './reasoning-view.js'
 import { redactSecretValue } from './secrets.js'
+import { THINKING_REST_GLYPH } from './timing.js'
 
 export type RowColor = 'text' | 'muted' | 'accent' | 'primary' | 'user' | 'success' | 'warning' | 'danger' | 'border'
 
@@ -123,8 +124,8 @@ export function toolOutputText(node: ToolNode): string {
   }).join('\n')
 }
 
-function statusGlyph(node: ToolNode): { glyph: string; color: RowColor } {
-  if (node.status === 'running') return { glyph: '◌', color: 'accent' }
+function statusGlyph(node: ToolNode, thinkingGlyph: string): { glyph: string; color: RowColor } {
+  if (node.status === 'running') return { glyph: thinkingGlyph, color: 'accent' }
   if (node.status === 'success') return { glyph: '✓', color: 'success' }
   if (node.status === 'error') return { glyph: '×', color: 'danger' }
   return { glyph: '!', color: 'warning' }
@@ -216,7 +217,7 @@ function emitBlock(out: NodeRows, block: TranscriptBlock, width: number, indent:
     return
   }
   if (block.type === 'reasoning') {
-    emitReasoning(out, block.text, width, indent, reasoning ?? { running: false, expanded: false, focused: false, thinkingGlyph: '◌' })
+    emitReasoning(out, block.text, width, indent, reasoning ?? { running: false, expanded: false, focused: false, thinkingGlyph: THINKING_REST_GLYPH })
     return
   }
   if (block.type === 'tool-call') {
@@ -241,7 +242,7 @@ function emitMessage(out: NodeRows, node: MessageNode, width: number, options: B
   out.push([
     ...(focused ? [{ text: '› ', color: 'accent' as RowColor }] : []),
     {
-      text: `${user ? 'YOU' : 'DEEPSEEK'}${sourceSuffix}${node.streaming ? '  ◌ streaming' : ''}${focused ? '  Ctrl+Y copy' : ''}`,
+      text: `${user ? 'YOU' : 'DEEPSEEK'}${sourceSuffix}${node.streaming ? `  ${options.thinkingGlyph} streaming` : ''}${focused ? '  Ctrl+Y copy' : ''}`,
       color: focused ? 'accent' : user ? 'user' : 'primary',
       bold: true,
     },
@@ -271,7 +272,7 @@ function emitDiff(out: NodeRows, diff: string, width: number, indent: number): v
 }
 
 function emitTool(out: NodeRows, node: ToolNode, width: number, options: BuildOptions, indent: number, depth = 0): void {
-  const status = statusGlyph(node)
+  const status = statusGlyph(node, options.thinkingGlyph)
   const key = toolKey(node)
   const focused = options.focusedBlockKey === key
   const expanded = options.expandedBlocks.has(key)
@@ -357,11 +358,25 @@ function blockSignature(key: string, options: RowOptions): string {
   return `${options.expandedBlocks.has(key) ? 'e' : ''}${options.focusedBlockKey === key ? 'f' : ''}`
 }
 
+/** Live nodes paint the shared spinner; settled ones keep a stable cache key. */
+function nodeUsesSpinner(node: TranscriptNode): boolean {
+  if (node.kind === 'message') {
+    return node.streaming || node.blocks.some(block => block.type === 'reasoning' && block.streaming === true)
+  }
+  if (node.kind === 'tool') return toolUsesSpinner(node)
+  return false
+}
+
+function toolUsesSpinner(node: ToolNode): boolean {
+  return node.status === 'running' || node.children.some(toolUsesSpinner)
+}
+
 function nodeSignature(node: TranscriptNode, options: RowOptions): string {
   const blocks = node.kind === 'message'
     ? [blockSignature(messageKey(node.id), options), ...node.blocks.map((block, index) => block.type !== 'reasoning' ? '' : blockSignature(`${node.id}:reasoning:${index}`, options))].join(',')
     : node.kind === 'tool' ? toolSignature(node, options) : ''
-  return `${options.width}|${options.compact ? 'c' : 'w'}|${options.thinkingGlyph}|${blocks}`
+  const spin = nodeUsesSpinner(node) ? options.thinkingGlyph : ''
+  return `${options.width}|${options.compact ? 'c' : 'w'}|${spin}|${blocks}`
 }
 
 function toolSignature(node: ToolNode, options: RowOptions): string {

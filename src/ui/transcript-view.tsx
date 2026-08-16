@@ -5,6 +5,7 @@ import { presentReasoning } from './reasoning-view.js'
 import { displayWidth, sliceCells } from './display-width.js'
 import { messageKey, toolKey, toolOutputText, type RowColor, type RowSegment, type TranscriptRow } from './transcript-rows.js'
 import type { Theme } from './theme.js'
+import { THINKING_REST_GLYPH } from './timing.js'
 
 /** One keyboard-selectable block: a message's text, a reasoning trace, or a tool's output. */
 export interface TranscriptBlockRef {
@@ -168,12 +169,13 @@ export function TranscriptView({ rows, viewport, offset, theme, plain = false, s
   )
 }
 
-export function ReasoningDetailView({ item, width, rows, offset, theme }: {
+export function ReasoningDetailView({ item, width, rows, offset, theme, thinkingGlyph = THINKING_REST_GLYPH }: {
   item: ReasoningItem
   width: number
   rows: number
   offset: number
   theme: Theme
+  thinkingGlyph?: string
 }): React.JSX.Element {
   const view = presentReasoning(item.text, {
     // Reserve one title row plus both possible scroll markers. This keeps the
@@ -184,7 +186,7 @@ export function ReasoningDetailView({ item, width, rows, offset, theme }: {
   const showBefore = view.hasBefore && markerSlots-- > 0
   const showAfter = view.hasAfter && markerSlots > 0
   return <Box flexDirection="column">
-    <Text bold color={theme.accent}>{item.running ? '◌ THINKING · LIVE DETAIL' : '◇ THOUGHT · DETAIL'}<Text color={theme.muted}> · {view.totalRows} rows</Text></Text>
+    <Text bold color={theme.accent}>{item.running ? `${thinkingGlyph} THINKING · LIVE DETAIL` : '◇ THOUGHT · DETAIL'}<Text color={theme.muted}> · {view.totalRows} rows</Text></Text>
     {showBefore && <Text color={theme.muted}>↑ earlier reasoning</Text>}
     {view.body.map((line, index) => <Text key={index} color={theme.muted} italic>│ {line === '' ? ' ' : line}</Text>)}
     {showAfter && <Text color={theme.muted}>↓ more reasoning · PgDn</Text>}
