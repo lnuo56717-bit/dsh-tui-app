@@ -3,12 +3,15 @@ import {
   installModelSelection, type Agent, type AgentHandle, type ModelSelection, type ModelSelectionRef,
 } from '@deepseek-ai/dsh-agent'
 import { randomUUID } from 'node:crypto'
-import { decodeStorageRecord, SessionId, type SessionHeader, type UserMessage } from '@deepseek-ai/dsh-session'
+import { rm } from 'node:fs/promises'
+import { dirname } from 'node:path'
+import { SessionId, type SessionEvent, type SessionHeader, type UserMessage } from '@deepseek-ai/dsh-session'
 import {
   attachProjections, type AttachedProjections, type ProjectionRegistryLike, type ProjectionSnapshotView,
 } from './projection-store.js'
 import type { ThemeName } from './startup.js'
 import { redactSecrets } from './ui/secrets.js'
+import { parseRawSessionEvents, repairedSeed } from './session-repair.js'
 import { foldSessionSummary, type SessionSummaryFacts } from './session-summary.js'
 import { EMPTY_TRANSCRIPT, type EventLike } from './transcript-fold.js'
 import { attachTranscript, TranscriptStore, type AttachedTranscript } from './transcript-store.js'
@@ -159,6 +162,8 @@ interface PersistenceService {
   inspect?(id: ReturnType<typeof SessionId>, signal?: AbortSignal): Promise<StoredLog>
   /** The backend's own raw artifact text; the rescue read when `readFrom` rejects a torn log. */
   readRaw?(id: ReturnType<typeof SessionId>, signal?: AbortSignal): Promise<{ meta: SessionHeader; content: string } | undefined>
+  /** Side-effect-free artifact location; used to remove an abandoned empty session. */
+  locate?(meta: SessionHeader): { readonly kind: string; readonly path: string } | undefined
 }
 interface PermissionService {
   readonly names: readonly string[]
@@ -352,6 +357,7 @@ export class InteractionController {
       })
     }
     let handle: AgentHandle
+    let notice = resume === undefined ? 'New session ready' : `Resumed ${resume}`
     try {
       handle = resume === undefined
         ? await agents.create({
@@ -362,7 +368,16 @@ export class InteractionController {
             resumeSessionId: SessionId(resume), agentOptions: { provider: seed.provider, model: seed.model }, setup,
           })
     } catch (error) {
-      throw error
+      if (resume === undefined) throw error
+      const recovered = await this.repairedSeed(resume)
+      if (recovered === undefined) throw error
+      handle = await agents.create({
+        sessionId: SessionId(`session-${randomUUID()}`),
+        seed: recovered,
+        meta: { cwd: process.cwd(), parentSession: SessionId(resume), seedLength: recovered.length },
+        agentOptions: { provider: seed.provider, model: seed.model }, setup,
+      })
+      notice = 'Opened a repaired copy — the stored log has a seq gap'
     }
     await handle.agent.whenIdle()
     scopedAgent ??= handle.agent
@@ -380,8 +395,7 @@ export class InteractionController {
       model: `${selection.provider}/${selection.model}`, agentStatus: handle.agent.status,
       reasoningEffort: selection.reasoningEffort === undefined ? undefined : String(selection.reasoningEffort),
       contextWindow: info?.context?.contextWindow,
-      permission: this.currentPermission(), notice: resume === undefined ? 'New session ready' : `Resumed ${resume}`,
-      error: undefined,
+      permission: this.currentPermission(), notice, error: undefined,
     })
   }
 
@@ -391,23 +405,19 @@ export class InteractionController {
     this.modelOperation += 1
     this.patch({ agentStatus: 'switching', notice: id === undefined ? 'Creating a new session…' : `Resuming ${id}…`, error: undefined })
     this.settleBlocking('unavailable')
-    this.attached?.dispose()
-    this.attached = undefined
-    this.projections?.dispose()
-    this.projections = undefined
-    this.transcript.replace(EMPTY_TRANSCRIPT)
-    this.patch({ projection: undefined })
-    await Promise.resolve()
-    await this.handle?.dispose()
-    this.handle = undefined
-    this.selection = undefined
+    await this.releaseHandle()
     try {
       await this.open(id)
     } catch (error) {
-      this.patch({
-        agentStatus: 'idle', error: error instanceof Error ? error.message : String(error),
-        notice: undefined, sessionId: undefined,
-      })
+      try {
+        await this.open()
+        this.patch({ error: error instanceof Error ? error.message : String(error) })
+      } catch {
+        this.patch({
+          agentStatus: 'idle', error: error instanceof Error ? error.message : String(error),
+          notice: undefined, sessionId: undefined,
+        })
+      }
     } finally {
       this.accepting = true
     }
@@ -566,7 +576,30 @@ export class InteractionController {
       item,
       activity: (await this.describeSession(item.id).catch(() => undefined))?.updatedAt ?? item.createdAt,
     })))
-    return ordered.sort((left, right) => right.activity - left.activity).map(entry => entry.item)
+    return ordered
+      .sort((left, right) => right.activity - left.activity)
+      .map(entry => entry.item)
+      .filter(item => {
+        const live = item.current ? this.handle?.agent.session.events : undefined
+        const summary = live !== undefined
+          ? { id: item.id, ...foldSessionSummary(live) }
+          : this.summaries.get(item.id)
+        return summary !== undefined && (summary.prompts > 0 || summary.title !== undefined || summary.firstPrompt !== undefined)
+      })
+  }
+
+  /** Rebuild a contiguous, turn-balanced seed from a stored log the strict loader rejected. */
+  private async repairedSeed(id: string): Promise<SessionEvent[] | undefined> {
+    const persistence = this.ctx.get('sessionPersistence') as PersistenceService | undefined
+    if (persistence?.readRaw === undefined) return undefined
+    try {
+      const raw = await persistence.readRaw(SessionId(id))
+      if (raw === undefined || raw.content === '') return undefined
+      const seed = repairedSeed(parseRawSessionEvents(raw.content))
+      return seed.length === 0 ? undefined : seed
+    } catch {
+      return undefined
+    }
   }
 
   /**
@@ -606,19 +639,7 @@ export class InteractionController {
     try {
       const raw = await persistence.readRaw(SessionId(id), signal)
       if (raw === undefined || raw.content === '') return undefined
-      const events: EventLike[] = []
-      for (const line of raw.content.split('\n')) {
-        if (line.trim() === '') continue
-        let record: unknown
-        try { record = JSON.parse(line) } catch { continue }
-        if (typeof record !== 'object' || record === null) continue
-        const item = record as { type?: unknown }
-        if (item.type === 'text-chunks' || item.type === 'reasoning-chunks' || item.type === 'tool-call-chunks') {
-          try { events.push(...decodeStorageRecord(record as never) as unknown as EventLike[]) } catch { continue }
-        } else if (typeof item.type === 'string') {
-          events.push(record as EventLike)
-        }
-      }
+      const events = parseRawSessionEvents(raw.content)
       if (events.length === 0) return undefined
       return { id, ...foldSessionSummary(events) }
     } catch {
@@ -910,13 +931,29 @@ export class InteractionController {
     await Promise.resolve()
     this.questionProviderDispose?.()
     this.questionProviderDispose = undefined
+    await this.releaseHandle()
+  }
+
+  /** Drop the live handle and delete a never-used welcome session so /resume stays clean. */
+  private async releaseHandle(): Promise<void> {
+    const handle = this.handle
+    const abandoned = handle !== undefined && foldSessionSummary(handle.agent.session.events).prompts === 0
+    const location = abandoned
+      ? (this.ctx.get('sessionPersistence') as PersistenceService | undefined)?.locate?.(handle.agent.session.header)
+      : undefined
     this.attached?.dispose()
     this.attached = undefined
     this.projections?.dispose()
     this.projections = undefined
-    await this.handle?.dispose()
+    this.transcript.replace(EMPTY_TRANSCRIPT)
+    this.patch({ projection: undefined })
+    await Promise.resolve()
+    await handle?.dispose()
     this.handle = undefined
     this.selection = undefined
+    if (location?.path) {
+      await rm(dirname(location.path), { recursive: true, force: true }).catch(() => undefined)
+    }
   }
 }
 

@@ -125,7 +125,16 @@ describe('persisted sessions read as conversations, not ids', () => {
     })
     const controller = new InteractionController(fx.ctx, 'abyss')
     const items = await controller.listSessions()
-    expect(items.map(item => item.id)).toEqual(['session-b', 'session-a'])
+    expect(items.map(item => item.id)).toEqual(['session-b'])
+  })
+
+  it('hides unused untitled welcome sessions from /resume', async () => {
+    const fx = fixture(log, {
+      'session-a': [{ seq: 0, time: 10, type: 'session/created', data: {} }],
+    })
+    const controller = new InteractionController(fx.ctx, 'abyss')
+    const items = await controller.listSessions()
+    expect(items.map(item => item.id)).toEqual(['session-b'])
   })
 
   it('labels a row by title, then opening prompt, then id — and keeps the id in the detail line', () => {
