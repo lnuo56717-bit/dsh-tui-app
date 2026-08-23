@@ -24,7 +24,7 @@ function harness(columns: number, rows: number) {
   let snapshot: RuntimeSnapshot = {
     sessionId: 'session-timer', cwd: 'C:\\work', model: 'mock/whale', agentStatus: 'running',
     permission: 'workspace-write', projection: undefined, theme: 'abyss', notice: undefined, error: undefined,
-    approval: undefined, questions: undefined,
+    approval: undefined, questions: undefined, pendingImages: [], imageInput: false,
   }
   const store = new TranscriptStore()
   const controller = {

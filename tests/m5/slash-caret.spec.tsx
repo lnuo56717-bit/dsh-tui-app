@@ -22,6 +22,7 @@ function harness(columns: number, rows: number) {
   const snapshot: RuntimeSnapshot = {
     sessionId: 's', cwd: '.', model: 'm', agentStatus: 'idle', permission: undefined,
     projection: undefined, theme: 'abyss', notice: undefined, error: undefined, approval: undefined, questions: undefined,
+    pendingImages: [], imageInput: false,
   }
   const controller = {
     transcript: new TranscriptStore(),

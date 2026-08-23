@@ -17,6 +17,7 @@ function controller(snapshot: RuntimeSnapshot): InteractionController {
 const base: RuntimeSnapshot = {
   sessionId: 'session-m3', cwd: 'C:\\work', model: 'mock/whale', agentStatus: 'running', permission: 'workspace-write',
   projection: undefined, theme: 'abyss', notice: undefined, error: undefined, approval: undefined, questions: undefined,
+  pendingImages: [], imageInput: false,
 }
 
 describe('M3 blocking-card presentation', () => {

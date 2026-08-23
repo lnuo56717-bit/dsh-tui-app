@@ -25,6 +25,7 @@ function harness(columns: number, rows: number) {
       tokenUsage: { uncachedInputTokens: 10, outputTokens: 5, cacheReadTokens: 90, cacheWriteTokens: 0 },
     } },
     theme: 'abyss', notice: undefined, error: undefined, approval: undefined, questions: undefined,
+    pendingImages: [], imageInput: false,
   }
   const store = new TranscriptStore()
   store.dispatch({ seq: 0, time: Date.now() - 12_000, type: 'turn/start', data: { turn: 1 } })

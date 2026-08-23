@@ -52,6 +52,7 @@ const EMPTY_STORE = new TranscriptStore()
 const READ_ONLY_RUNTIME: RuntimeSnapshot = Object.freeze({
   sessionId: undefined, cwd: process.cwd(), model: 'model —', agentStatus: 'idle', permission: undefined,
   projection: undefined, theme: 'auto', notice: undefined, error: undefined, approval: undefined, questions: undefined,
+  pendingImages: [], imageInput: false,
 })
 const noopSubscribe = (): (() => void) => () => {}
 const readOnlySnapshot = (): RuntimeSnapshot => READ_ONLY_RUNTIME
@@ -148,6 +149,7 @@ function Panel({ overlay, editor, controller, runtime, store, theme, plain, widt
   </PanelFrame>
   if (overlay.kind === 'keys') return <PanelFrame title="KEY REFERENCE" theme={theme} plain={plain}>
     <Text><Text bold>Send</Text>  Enter prompt · Ctrl+M multiline · Alt+Enter send · Ctrl+L steer</Text>
+    <Text><Text bold>Image</Text>  Ctrl+O clipboard · /image path · Backspace on empty prompt removes last</Text>
     <Text><Text bold>Edit</Text>  Ctrl+W word · Ctrl+U to start · Ctrl+K to end · ↑ history</Text>
     <Text><Text bold>Open</Text>  Ctrl+P/? commands · Ctrl+S sessions · Ctrl+X keys</Text>
     <Text><Text bold>Blocks</Text> Tab then ↑↓ select · ←/→ fold tool output and thoughts · Enter full</Text>
@@ -257,9 +259,13 @@ function Composer({ editor, focused, runtime, theme, plain, lines, hardwareCaret
   const context = contextStatus(runtime)
   return <Box borderStyle={plain ? 'classic' : 'single'} borderColor={focused ? theme.primary : theme.border} minHeight={editor.multiline ? 6 : 4} paddingX={1} flexDirection="column" flexShrink={0}>
     <Box justifyContent="space-between">
-      <Text><Text bold color={theme.primary}>⌁ {mode}</Text>{!plain && <Text color={theme.muted}> · {editor.multiline ? 'multiline · Alt+Enter sends' : 'Enter sends · Ctrl+M multiline'}</Text>}</Text>
+      <Text><Text bold color={theme.primary}>⌁ {mode}</Text>{!plain && <Text color={theme.muted}> · {editor.multiline ? 'multiline · Alt+Enter sends' : 'Enter sends · Ctrl+M multiline · Ctrl+O image'}</Text>}</Text>
       {context !== undefined && <Text bold color={theme.accent}>{context}</Text>}
     </Box>
+    {runtime.pendingImages.length > 0 && <Text color={theme.muted} wrap="truncate">
+      {runtime.pendingImages.map(image => `[image] ${image.name} ${image.width}×${image.height}`).join(' · ')}
+      {runtime.imageInput ? '' : ' · switch to a vision model to send'}
+    </Text>}
     {lines.map((line, index) => <Text key={index} color={theme.text} wrap="truncate">
       <Text color={theme.accent}>{index === 0 ? '› ' : '  '}</Text>
       {line.segments.map((segment, part) => <Text key={part} inverse={segment.caret ? focused && !hardwareCaret : segment.selected}>{segment.text}</Text>)}
@@ -322,10 +328,10 @@ export function Shell(props: ShellProps): React.JSX.Element {
   const whaleExtra = showWhale ? 7 : 0
   const blockingRows = runtime.approval !== undefined || runtime.questions !== undefined ? 6 : 0
   const overlayRows = overlay === undefined ? 0
-    : overlay.kind === 'keys' ? 12
+    : overlay.kind === 'keys' ? 13
       : overlay.kind === 'sessions' ? SESSION_ROWS + 4
         : overlay.kind === 'session-info' ? 9 : overlay.kind === 'models' ? 10 : overlay.kind === 'efforts' ? 8 : 7
-  const composerRows = editor.multiline ? 6 : 4
+  const composerRows = (editor.multiline ? 6 : 4) + (runtime.pendingImages.length > 0 ? 1 : 0)
   const viewportRows = Math.max(1, rows - (compact ? 6 : 13 + whaleExtra) - blockingRows - overlayRows - composerRows)
   const transcriptWidth = Math.max(10, columns - margin * 2 - 4)
   // The scrollbar column is always reserved, so crossing the viewport height
@@ -647,8 +653,12 @@ export function Shell(props: ShellProps): React.JSX.Element {
     })
   }
 
+  const attachClipboard = (): void => {
+    void controller?.attachClipboardImage()
+  }
+
   const submitPrompt = (steer = false): void => {
-    if (editor.text.trim() === '') return
+    if (editor.text.trim() === '' && runtime.pendingImages.length === 0) return
     setStopArmed(false)
     enterAt.current = 0
     if (editor.text.startsWith('/')) {
@@ -1009,6 +1019,7 @@ export function Shell(props: ShellProps): React.JSX.Element {
     }
     if (key.ctrl && input === 'm') { setEditor(value => ({ ...value, multiline: !value.multiline })); return }
     if (key.ctrl && input === 'l') { submitPrompt(true); return }
+    if (key.ctrl && input === 'o') { attachClipboard(); return }
     if (key.ctrl && input === 'w') { setEditor(value => deleteWord(value)); return }
     if (key.ctrl && input === 'u') { setEditor(value => deleteToStart(value)); return }
     if (key.ctrl && input === 'k') { setEditor(value => deleteToEnd(value)); return }
@@ -1023,12 +1034,15 @@ export function Shell(props: ShellProps): React.JSX.Element {
     else if (key.rightArrow) setEditor(value => moveCursor(value, 1))
     else if (key.home) setEditor(value => moveCursorTo(value, 'start'))
     else if (key.end) setEditor(value => moveCursorTo(value, 'end'))
-    else if (key.backspace) setEditor(value => backspace(value))
+    else if (key.backspace) {
+      if (editor.text === '' && editor.cursor === 0 && runtime.pendingImages.length > 0) controller?.removeLastImage()
+      else setEditor(value => backspace(value))
+    }
     else if (key.delete) setEditor(value => deleteForward(value))
     else if ((key.upArrow || key.downArrow) && key.ctrl) recallHistory(key.upArrow ? 'up' : 'down')
     else if (key.upArrow || key.downArrow) handleVerticalNav(key.upArrow ? 'up' : 'down', false)
     else if (key.return) {
-      if (runtime.agentStatus === 'running' && editor.text.trim() === '') {
+      if (runtime.agentStatus === 'running' && editor.text.trim() === '' && runtime.pendingImages.length === 0) {
         // Double Enter: after a send it TAKES OVER — the queued drafts are
         // re-sent after the abort so the agent immediately continues thinking
         // with them, for as long as the turn still runs. Without a recent send
@@ -1107,7 +1121,7 @@ export function Shell(props: ShellProps): React.JSX.Element {
                 : stopArmed
                   ? 'Enter again to stop · Esc stops now'
                   : 'Esc stop · Enter sends · Enter again takes over'
-              : 'Enter send · Ctrl+P commands · Ctrl+Y copy last block'
+              : 'Enter send · Ctrl+O image · Ctrl+P commands · Ctrl+Y copy last block'
   const helpLine = middleEllipsis(quitArmed ? 'Ctrl+C again to quit' : compact ? help : `${help} · Ctrl+S sessions · Shift+Tab permissions`, Math.max(1, columns - margin * 2))
 
   return (

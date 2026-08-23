@@ -37,7 +37,7 @@ function harness(questions: RuntimeSnapshot['questions']) {
   const snapshot: RuntimeSnapshot = {
     sessionId: 'session-questions', cwd: 'C:\\work', model: 'mock/whale', agentStatus: 'running',
     permission: 'workspace-write', projection: undefined, theme: 'abyss', notice: undefined, error: undefined,
-    approval: undefined, questions,
+    approval: undefined, questions, pendingImages: [], imageInput: false,
   }
   const controller = {
     transcript: new TranscriptStore(),

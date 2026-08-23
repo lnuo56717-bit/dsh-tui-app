@@ -61,6 +61,7 @@ describe('a multi-line dsh command result never moves the composer', () => {
       const runtime: RuntimeSnapshot = {
         sessionId: 's', cwd: '.', model: 'm', agentStatus: 'idle', permission: undefined,
         projection: undefined, theme: 'abyss', notice: GOAL_NOTICE, error: undefined, approval: undefined, questions: undefined,
+        pendingImages: [], imageInput: false,
       }
       const app = harness(columns, rows, runtime)
       try {
@@ -93,6 +94,7 @@ describe('a multi-line dsh command result never moves the composer', () => {
     const runtime: RuntimeSnapshot = {
       sessionId: 's', cwd: '.', model: 'm', agentStatus: 'idle', permission: undefined,
       projection: undefined, theme: 'abyss', notice: undefined, error: 'first failure\nsecond failure\nthird failure', approval: undefined, questions: undefined,
+      pendingImages: [], imageInput: false,
     }
     const app = harness(80, 24, runtime)
     try {

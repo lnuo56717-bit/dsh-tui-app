@@ -43,7 +43,7 @@ function harness(withTranscript: boolean) {
   const snapshot: RuntimeSnapshot = {
     sessionId: 'session-mouse', cwd: 'C:\\work', model: 'mock/whale', agentStatus: 'idle',
     permission: 'workspace-write', projection: undefined, theme: 'abyss', notice: undefined, error: undefined,
-    approval: undefined, questions: undefined,
+    approval: undefined, questions: undefined, pendingImages: [], imageInput: false,
   }
   const controller = {
     transcript: withTranscript ? new TranscriptStore(foldEvents(conversation(2))) : new TranscriptStore(),

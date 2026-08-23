@@ -34,6 +34,7 @@ Core controls:
   Enter             send prompt
   Ctrl+P, Ctrl+S    commands, sessions
   Ctrl+M, Alt+Enter multiline, send multiline
+  Ctrl+O            attach clipboard image; /image [path] attaches a file
   Ctrl+C            cancel, clear, then confirm quit
 
 Examples:

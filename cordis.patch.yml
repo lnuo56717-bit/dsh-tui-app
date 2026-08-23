@@ -5,6 +5,11 @@
   disabled: true
 
 - insert:
+    # Wrap the installed rc.5 DeepSeek adapter with vision catalog claims and
+    # image serialization. Must mount after dsh-base's llm-deepseek row.
+    - id: llm-vision
+      name: 'dsh-tui-app/llm-vision'
+
     # Model-facing ask_user_question tool, mounted BEFORE tui-runner so the
     # runner's loader.await() (src/index.ts) sees it registered before the
     # agent is created; a profile-patch placement races the agent's tool

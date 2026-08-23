@@ -39,6 +39,8 @@ describe('80-column context visibility', () => {
       error: undefined,
       approval: undefined,
       questions: undefined,
+      pendingImages: [],
+      imageInput: false,
     }
 
     const output = renderToString(

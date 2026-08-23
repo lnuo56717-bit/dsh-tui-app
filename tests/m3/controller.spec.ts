@@ -6,7 +6,7 @@ import { InteractionController } from '../../src/interaction-controller.js'
 
 type Handler = (...args: any[]) => any
 
-function fixture() {
+function fixture(over?: { imageInput?: boolean }) {
   const handlers = new Map<string, Handler[]>()
   const followups: UserMessage[] = []
   const steers: UserMessage[] = []
@@ -54,6 +54,25 @@ function fixture() {
     permissionPresets: { names: ['workspace-write', 'danger-full-access'], current: () => 'workspace-write', set() {} },
     sessionPersistence: { async list() { return [] } },
     sessionTitle: { rename() {} },
+    attachments: {
+      imageLimits: { maxImagesPerMessage: 20 },
+      async saveImage(input: { data: Uint8Array; mediaType: string; name?: string }) {
+        return {
+          attachmentId: 'att-1', mediaType: input.mediaType, bytes: input.data.length,
+          width: 1, height: 1, ...input.name === undefined ? {} : { name: input.name },
+        }
+      },
+    },
+    ...over?.imageInput === true ? {
+      llm: {
+        listProviders: () => [],
+        async listModels() { return [] },
+        async resolveModelInfo() {
+          return { provider: 'mock', id: 'whale', name: 'Whale', inputModalities: ['text', 'image'] }
+        },
+        async resolveCallConfig(config: { provider: string; model: string }) { return config },
+      },
+    } : {},
   }
 
   return { ctx, handlers, followups, steers, cancels, resumed, get questionProvider() { return questionProvider } }
@@ -95,6 +114,7 @@ describe('M3 interaction controller', () => {
     ])
     expect(controller.commandChoices().some(item => item.name === 'resume' && item.source === 'tui')).toBe(true)
     expect(controller.commandChoices().filter(item => item.name === 'resume').map(item => item.source)).toEqual(['dsh', 'tui'])
+    expect(controller.commandChoices().some(item => item.name === 'image' && item.source === 'tui')).toBe(true)
     await controller.switchSession('session-next')
     expect(fx.resumed).toEqual(['session-existing', 'session-next'])
     await controller.dispose()
@@ -119,4 +139,23 @@ describe('M3 interaction controller', () => {
     expect(fx.followups.map(item => item.content)).toEqual([[{ type: 'text', text: '接管中文' }]])
     await controller.dispose()
   }, 5_000)
+
+  it('stages a saved image and sends it with the next prompt on a vision model', async () => {
+    const fx = fixture({ imageInput: true })
+    const controller = new InteractionController(fx.ctx, 'abyss')
+    await controller.start()
+    expect(controller.getSnapshot().imageInput).toBe(true)
+    const png = Uint8Array.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 1])
+    const attached = await (controller as unknown as { attachLoaded: (loaded: { data: Uint8Array; mediaType: 'image/png'; name: string }) => Promise<boolean> })
+      .attachLoaded({ data: png, mediaType: 'image/png', name: 'dot.png' })
+    expect(attached).toBe(true)
+    expect(controller.getSnapshot().pendingImages).toEqual([{ name: 'dot.png', width: 1, height: 1 }])
+    controller.submit('what is this?')
+    expect(controller.getSnapshot().pendingImages).toEqual([])
+    expect(fx.followups[0]?.content).toMatchObject([
+      { type: 'image', attachment: { mediaType: 'image/png', name: 'dot.png' } },
+      { type: 'text', text: 'what is this?' },
+    ])
+    await controller.dispose()
+  })
 })

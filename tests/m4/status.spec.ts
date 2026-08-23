@@ -5,6 +5,7 @@ import { cacheHitLabel, formatFooter, sessionInfoLines, shortModelLabel, statusS
 const base: RuntimeSnapshot = {
   sessionId: 'session-actual', cwd: 'C:\\项目\\鲸鱼', model: 'deepseek/chat', agentStatus: 'idle', permission: undefined,
   projection: undefined, theme: 'abyss', notice: undefined, error: undefined, approval: undefined, questions: undefined,
+  pendingImages: [], imageInput: false,
 }
 
 describe('M4 real-fact status formatting', () => {

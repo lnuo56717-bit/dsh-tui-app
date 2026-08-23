@@ -1,6 +1,13 @@
 node_modules/
 lib/
 coverage/
+.env
+.env.*
+!.env.example
+.credentials.yaml
+credentials.yaml
+*.pem
+*.key
 .m0-artifacts/
 .m0-grok/
 .m0-spike/node_modules/

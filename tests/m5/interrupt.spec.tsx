@@ -22,7 +22,7 @@ function harness(agentStatus: RuntimeSnapshot['agentStatus']) {
   const snapshot: RuntimeSnapshot = {
     sessionId: 'session-stop', cwd: 'C:\\work', model: 'mock/whale', agentStatus,
     permission: 'workspace-write', projection: undefined, theme: 'abyss', notice: undefined, error: undefined,
-    approval: undefined, questions: undefined,
+    approval: undefined, questions: undefined, pendingImages: [], imageInput: false,
   }
   const calls = { cancels: 0, submits: 0, takeOvers: 0, keep: [] as boolean[], takeoverTexts: [] as string[][] }
   const controller = {

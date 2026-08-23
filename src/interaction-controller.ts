@@ -15,6 +15,9 @@ import { parseRawSessionEvents, repairedSeed } from './session-repair.js'
 import { foldSessionSummary, type SessionSummaryFacts } from './session-summary.js'
 import { EMPTY_TRANSCRIPT, type EventLike } from './transcript-fold.js'
 import { attachTranscript, TranscriptStore, type AttachedTranscript } from './transcript-store.js'
+import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import { loadClipboardImage, loadImageFile, unquotePath, type LoadedImage } from './image-input.js'
+import { VISION_MODEL_ID } from './vision-models.js'
 
 export type ApprovalOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'
 
@@ -101,6 +104,16 @@ export interface RuntimeSnapshot {
   readonly error: string | undefined
   readonly approval: ApprovalRequestView | undefined
   readonly questions: QuestionRequestView | undefined
+  /** Images staged for the next prompt; not yet in the session log. */
+  readonly pendingImages: readonly PendingImageView[]
+  /** Whether the live model advertises image input. */
+  readonly imageInput: boolean
+}
+
+export interface PendingImageView {
+  readonly name: string
+  readonly width: number
+  readonly height: number
 }
 
 interface ApprovalRequestLike {
@@ -244,9 +257,24 @@ const LOCAL_COMMANDS: readonly CommandChoice[] = [
   { name: 'always-approve', description: 'Select danger-full-access after explicit confirmation', source: 'tui' },
   { name: 'workflows', description: 'Summarize durable workflow runs', source: 'tui' },
   { name: 'mouse', description: 'Toggle wheel scrolling so the terminal can drag-select text', source: 'tui' },
+  { name: 'image', description: 'Attach a clipboard or file image for the vision model', source: 'tui', inputHint: '[path | clear]' },
 ] as const
 
 export type LocalCommandAction = 'none' | 'quit' | 'help' | 'keys' | 'sessions' | 'models' | 'efforts' | 'session-info' | 'workflows' | 'confirm-danger' | 'confirm-new' | 'mouse'
+
+interface PendingImage {
+  readonly attachment: ImageAttachmentRef
+}
+
+interface DraftMessage {
+  readonly text: string
+  readonly images: readonly PendingImage[]
+}
+
+interface AttachmentService {
+  readonly imageLimits: { readonly maxImagesPerMessage: number }
+  saveImage(input: { data: Uint8Array; mediaType: ImageAttachmentRef['mediaType']; name?: string }): Promise<ImageAttachmentRef>
+}
 
 export class InteractionController {
   readonly transcript = new TranscriptStore()
@@ -266,6 +294,9 @@ export class InteractionController {
   private takeOverSeq = 0
   private defaultSaveChain: Promise<void> = Promise.resolve()
   private accepting = false
+  private pendingImages: PendingImage[] = []
+  private runningDrafts: DraftMessage[] = []
+  private imageInput = false
 
   constructor(ctx: Context, theme: ThemeName) {
     this.ctx = ctx
@@ -274,6 +305,7 @@ export class InteractionController {
       sessionId: undefined, cwd: process.cwd(), model: `${selection.provider}/${selection.model}`, agentStatus: 'starting',
       reasoningEffort: selection.reasoningEffort === undefined ? undefined : String(selection.reasoningEffort),
       permission: undefined, projection: undefined, theme, notice: undefined, error: undefined, approval: undefined, questions: undefined,
+      pendingImages: [], imageInput: false,
     }
   }
 
@@ -384,6 +416,9 @@ export class InteractionController {
     this.selection = selected
     const selection = selected.current ?? seed
     const info = await this.modelInfo(selection)
+    this.pendingImages = []
+    this.runningDrafts = []
+    this.imageInput = info?.inputModalities?.includes('image') === true
     this.handle = handle
     this.attached = attachTranscript(handle.agent.ctx, handle.agent.session, this.transcript)
     const projectionRegistry = this.ctx.get('sessionProjections') as ProjectionRegistryLike<Agent['session']> | undefined
@@ -396,6 +431,7 @@ export class InteractionController {
       reasoningEffort: selection.reasoningEffort === undefined ? undefined : String(selection.reasoningEffort),
       contextWindow: info?.context?.contextWindow,
       permission: this.currentPermission(), notice, error: undefined,
+      pendingImages: [], imageInput: this.imageInput,
     })
   }
 
@@ -425,20 +461,95 @@ export class InteractionController {
 
   submit(text: string, steer = false): void {
     const agent = this.handle?.agent
+    const images = this.pendingImages
     const normalized = text.trim()
-    if (!this.accepting || agent === undefined || normalized === '') return
+    if (!this.accepting || agent === undefined || (normalized === '' && images.length === 0)) return
+    if (images.length > 0 && !this.imageInput) {
+      this.fail(`Current model does not accept images. /switch to deepseek-official/${VISION_MODEL_ID}`)
+      return
+    }
+    const content: UserMessage['content'] = [
+      ...images.map(image => ({ type: 'image' as const, attachment: image.attachment })),
+      ...normalized === '' ? [] : [{ type: 'text' as const, text }],
+    ]
     const message: UserMessage = {
       id: `tui-${randomUUID()}` as UserMessage['id'], role: 'user', source: { kind: 'user' },
-      content: [{ type: 'text', text }],
+      content,
     }
+    this.pendingImages = []
+    if (agent.status === 'running') this.runningDrafts.push({ text, images })
+    else this.runningDrafts = []
     if (steer) agent.steer(message)
     else agent.followup(message)
-    this.patch({ agentStatus: agent.status, notice: steer ? 'Steering current/next step' : agent.status === 'running' ? 'Follow-up queued' : 'Prompt sent', error: undefined })
+    this.patch({
+      agentStatus: agent.status,
+      notice: steer ? 'Steering current/next step' : agent.status === 'running' ? 'Follow-up queued' : 'Prompt sent',
+      error: undefined,
+      pendingImages: [],
+    })
   }
 
   /** Publish a transient status line from the view layer, redacted like any other notice. */
   notify(message: string): void {
     this.patch({ notice: redactSecrets(message), error: undefined })
+  }
+
+  async attachClipboardImage(): Promise<boolean> {
+    const loaded = await loadClipboardImage()
+    if (loaded === undefined) return this.failBoolean('Clipboard has no image')
+    return this.attachLoaded(loaded)
+  }
+
+  async attachImagePath(path: string): Promise<boolean> {
+    try {
+      return await this.attachLoaded(await loadImageFile(unquotePath(path)))
+    } catch (error) {
+      return this.failBoolean(errorMessage(error))
+    }
+  }
+
+  removeLastImage(): boolean {
+    if (this.pendingImages.length === 0) return false
+    this.pendingImages = this.pendingImages.slice(0, -1)
+    this.patch({ pendingImages: this.pendingViews(), error: undefined, notice: this.pendingImages.length === 0 ? 'Removed last image' : `Images ${this.pendingImages.length}` })
+    return true
+  }
+
+  clearImages(): void {
+    this.pendingImages = []
+    this.patch({ pendingImages: [], notice: 'Cleared attached images', error: undefined })
+  }
+
+  private async attachLoaded(loaded: LoadedImage): Promise<boolean> {
+    const attachments = this.ctx.get('attachments') as AttachmentService | undefined
+    if (attachments === undefined) return this.failBoolean('Attachment service is unavailable')
+    if (this.pendingImages.length >= attachments.imageLimits.maxImagesPerMessage) {
+      return this.failBoolean(`At most ${attachments.imageLimits.maxImagesPerMessage} images per prompt`)
+    }
+    try {
+      const input = loaded.name === undefined
+        ? { data: loaded.data, mediaType: loaded.mediaType }
+        : { data: loaded.data, mediaType: loaded.mediaType, name: loaded.name }
+      const attachment = await attachments.saveImage(input)
+      this.pendingImages = [...this.pendingImages, { attachment }]
+      const hint = this.imageInput ? '' : ` · switch to ${VISION_MODEL_ID} before sending`
+      this.patch({
+        pendingImages: this.pendingViews(),
+        notice: `Attached ${attachment.name ?? loaded.name} (${attachment.width}×${attachment.height})${hint}`,
+        error: undefined,
+      })
+      return true
+    } catch (error) {
+      return this.failBoolean(errorMessage(error))
+    }
+  }
+
+  private pendingViews(): PendingImageView[] {
+    return this.pendingImages.map(image => ({
+      name: image.attachment.name ?? 'image',
+      width: image.attachment.width,
+      height: image.attachment.height,
+    }))
   }
 
   /**
@@ -450,6 +561,7 @@ export class InteractionController {
     const agent = this.handle?.agent
     if (agent?.status !== 'running') return false
     this.takeOverSeq += 1
+    if (!keepInbox) this.runningDrafts = []
     agent.cancel({ kind: 'user' }, keepInbox ? { keepInbox: true } : {})
     this.patch({ notice: keepInbox ? 'Taking over with your message…' : 'Cancelling active turn…' })
     return true
@@ -465,7 +577,10 @@ export class InteractionController {
   takeOver(texts: readonly string[]): boolean {
     const agent = this.handle?.agent
     const handle = this.handle
-    const pending = texts.map(item => item.trim()).filter(item => item !== '')
+    const drafts = this.runningDrafts.splice(0)
+    const pending = drafts.length > 0
+      ? drafts
+      : texts.map(text => ({ text, images: [] as PendingImage[] })).filter(item => item.text.trim() !== '')
     if (agent === undefined || handle === undefined || pending.length === 0) return false
     if (agent.status !== 'running') return false
     const seq = ++this.takeOverSeq
@@ -478,10 +593,15 @@ export class InteractionController {
       void agent.whenIdle().then(() => {
         if (seq !== this.takeOverSeq || this.handle !== handle || this.handle.agent !== agent) return
         if (agent.status === 'running') return
-        for (const text of pending) {
+        for (const draft of pending) {
+          const content: UserMessage['content'] = [
+            ...draft.images.map(image => ({ type: 'image' as const, attachment: image.attachment })),
+            ...draft.text.trim() === '' ? [] : [{ type: 'text' as const, text: draft.text }],
+          ]
+          if (content.length === 0) continue
           agent.followup({
             id: `tui-${randomUUID()}` as UserMessage['id'], role: 'user', source: { kind: 'user' },
-            content: [{ type: 'text', text }],
+            content,
           })
         }
         this.patch({ agentStatus: agent.status, notice: 'Taking over with your message…', error: undefined })
@@ -543,6 +663,15 @@ export class InteractionController {
       const route = parseModelRoute(input)
       if (route === undefined) return this.fail(`Usage: /${name} provider/model`)
       await this.switchModel(route.provider, route.model)
+      return 'none'
+    }
+    if (name === 'image') {
+      if (input === 'clear') { this.clearImages(); return 'none' }
+      if (input === '') {
+        await this.attachClipboardImage()
+        return 'none'
+      }
+      await this.attachImagePath(input)
       return 'none'
     }
     if (name === 'effort') {
@@ -704,10 +833,12 @@ export class InteractionController {
         provider: resolved.provider, model: resolved.model,
       }
       selection.current = next
+      this.imageInput = info.inputModalities?.includes('image') === true
       this.patch({
         model: `${resolved.provider}/${resolved.model}`,
         reasoningEffort: undefined,
         contextWindow: info.context?.contextWindow,
+        imageInput: this.imageInput,
         notice: this.snapshot.agentStatus === 'running'
           ? `Model applies to the next not-yet-assembled step: ${resolved.provider}/${resolved.model}`
           : `Model switched: ${resolved.provider}/${resolved.model}`,
