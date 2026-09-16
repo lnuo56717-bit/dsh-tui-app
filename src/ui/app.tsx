@@ -257,14 +257,17 @@ function Composer({ editor, focused, runtime, theme, plain, lines, hardwareCaret
 }): React.JSX.Element {
   const mode = runtime.agentStatus === 'running' ? 'FOLLOW-UP' : 'PROMPT'
   const context = contextStatus(runtime)
+  // Keep the bundle tolerant of older out-of-tree controllers while they add
+  // the image-input fields introduced after the original RuntimeSnapshot.
+  const pendingImages = runtime.pendingImages ?? []
   return <Box borderStyle={plain ? 'classic' : 'single'} borderColor={focused ? theme.primary : theme.border} minHeight={editor.multiline ? 6 : 4} paddingX={1} flexDirection="column" flexShrink={0}>
     <Box justifyContent="space-between">
       <Text><Text bold color={theme.primary}>⌁ {mode}</Text>{!plain && <Text color={theme.muted}> · {editor.multiline ? 'multiline · Alt+Enter sends' : 'Enter sends · Ctrl+M multiline · Ctrl+O image'}</Text>}</Text>
       {context !== undefined && <Text bold color={theme.accent}>{context}</Text>}
     </Box>
-    {runtime.pendingImages.length > 0 && <Text color={theme.muted} wrap="truncate">
-      {runtime.pendingImages.map(image => `[image] ${image.name} ${image.width}×${image.height}`).join(' · ')}
-      {runtime.imageInput ? '' : ' · switch to a vision model to send'}
+    {pendingImages.length > 0 && <Text color={theme.muted} wrap="truncate">
+      {pendingImages.map(image => `[image] ${image.name} ${image.width}×${image.height}`).join(' · ')}
+      {runtime.imageInput === true ? '' : ' · switch to a vision model to send'}
     </Text>}
     {lines.map((line, index) => <Text key={index} color={theme.text} wrap="truncate">
       <Text color={theme.accent}>{index === 0 ? '› ' : '  '}</Text>
@@ -287,6 +290,7 @@ export function Shell(props: ShellProps): React.JSX.Element {
   const theme = useMemo(() => resolveTheme(themeName, props.color), [themeName, props.color])
   const store = controller?.transcript ?? props.store ?? EMPTY_STORE
   const state = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot)
+  const pendingImages = runtime.pendingImages ?? []
   const [editor, setEditor] = useState<EditorState>(EMPTY_EDITOR)
   const [history, setHistory] = useState<string[]>([])
   const [historyIndex, setHistoryIndex] = useState(-1)
@@ -331,7 +335,7 @@ export function Shell(props: ShellProps): React.JSX.Element {
     : overlay.kind === 'keys' ? 13
       : overlay.kind === 'sessions' ? SESSION_ROWS + 4
         : overlay.kind === 'session-info' ? 9 : overlay.kind === 'models' ? 10 : overlay.kind === 'efforts' ? 8 : 7
-  const composerRows = (editor.multiline ? 6 : 4) + (runtime.pendingImages.length > 0 ? 1 : 0)
+  const composerRows = (editor.multiline ? 6 : 4) + (pendingImages.length > 0 ? 1 : 0)
   const viewportRows = Math.max(1, rows - (compact ? 6 : 13 + whaleExtra) - blockingRows - overlayRows - composerRows)
   const transcriptWidth = Math.max(10, columns - margin * 2 - 4)
   // The scrollbar column is always reserved, so crossing the viewport height
@@ -658,7 +662,7 @@ export function Shell(props: ShellProps): React.JSX.Element {
   }
 
   const submitPrompt = (steer = false): void => {
-    if (editor.text.trim() === '' && runtime.pendingImages.length === 0) return
+    if (editor.text.trim() === '' && pendingImages.length === 0) return
     setStopArmed(false)
     enterAt.current = 0
     if (editor.text.startsWith('/')) {
@@ -1035,14 +1039,14 @@ export function Shell(props: ShellProps): React.JSX.Element {
     else if (key.home) setEditor(value => moveCursorTo(value, 'start'))
     else if (key.end) setEditor(value => moveCursorTo(value, 'end'))
     else if (key.backspace) {
-      if (editor.text === '' && editor.cursor === 0 && runtime.pendingImages.length > 0) controller?.removeLastImage()
+      if (editor.text === '' && editor.cursor === 0 && pendingImages.length > 0) controller?.removeLastImage()
       else setEditor(value => backspace(value))
     }
     else if (key.delete) setEditor(value => deleteForward(value))
     else if ((key.upArrow || key.downArrow) && key.ctrl) recallHistory(key.upArrow ? 'up' : 'down')
     else if (key.upArrow || key.downArrow) handleVerticalNav(key.upArrow ? 'up' : 'down', false)
     else if (key.return) {
-      if (runtime.agentStatus === 'running' && editor.text.trim() === '' && runtime.pendingImages.length === 0) {
+      if (runtime.agentStatus === 'running' && editor.text.trim() === '' && pendingImages.length === 0) {
         // Double Enter: after a send it TAKES OVER — the queued drafts are
         // re-sent after the abort so the agent immediately continues thinking
         // with them, for as long as the turn still runs. Without a recent send

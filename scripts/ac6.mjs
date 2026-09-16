@@ -20,6 +20,7 @@ const events = [
 const runtime = {
   sessionId: 'session-cjk-actual', cwd: 'C:\\项目\\深海工作区', model: 'deepseek/chat', agentStatus: 'idle', permission: 'workspace-write',
   theme: 'abyss', notice: undefined, error: undefined, approval: undefined, questions: undefined,
+  pendingImages: [], imageInput: false,
   projection: { asOfSeq: 2, values: { title: '中文鲸鱼修复会话', permissions: { currentValue: 'workspace-write', options: [] }, contextPressure: { projectedTokens: 18000, contextWindow: 128000 } } },
 }
 const controller = { transcript: new TranscriptStore(foldEvents(events)), subscribe: () => () => {}, getSnapshot: () => runtime }
