@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { EMPTY_TRANSCRIPT, foldEvents, foldTranscript, NO_TIMING, type EventLike } from '../../src/transcript-fold.js'
 import { displayWidth } from '../../src/ui/display-width.js'
-import { elapsedFacts, elapsedLabel, formatElapsed, settledTiming, SPIN_FRAMES, SPIN_TICK_MS, THINKING_REST_GLYPH, thinkingFrame } from '../../src/ui/timing.js'
+import { elapsedFacts, elapsedLabel, formatElapsed, settledTiming, SPIN_FRAMES, SPIN_TICK_MS, THINKING_REST_GLYPH, thinkingFrame, tokenThroughputLabel } from '../../src/ui/timing.js'
 
 const T0 = 1_700_000_000_000
 
@@ -108,5 +108,60 @@ describe('the live thinking spinner', () => {
     expect(thinkingFrame(-50)).toBe('⠁')
     expect(displayWidth(THINKING_REST_GLYPH)).toBe(1)
     for (const glyph of SPIN_FRAMES) expect(displayWidth(glyph)).toBe(1)
+  })
+})
+
+describe('live provider-token throughput', () => {
+  it('counts real non-empty token-boundary deltas and updates before completion', () => {
+    const state = foldEvents([
+      turn(0, 'turn/start', 1, T0),
+      { seq: 1, time: T0 + 100, type: 'step/start', data: { turn: 1, step: 0 } },
+      { seq: 2, time: T0 + 1_000, type: 'assistant/chunk', data: { turn: 1, step: 0, chunk: { type: 'reasoning-delta', index: 0, text: '想' } } },
+      { seq: 3, time: T0 + 1_020, type: 'assistant/chunk', data: { turn: 1, step: 0, chunk: { type: 'reasoning-delta', index: 0, text: '' } } },
+      { seq: 4, time: T0 + 1_100, type: 'assistant/chunk', data: { turn: 1, step: 0, chunk: { type: 'text-delta', index: 1, text: '好' } } },
+      { seq: 5, time: T0 + 1_200, type: 'assistant/chunk', data: { turn: 1, step: 0, chunk: { type: 'tool-call-delta', index: 2, name: 'read', argumentsDelta: '' } } },
+    ])
+    expect(state.throughput).toEqual({
+      turn: 1, step: 0, firstTokenAt: T0 + 1_000, lastTokenAt: T0 + 1_200, tokenCount: 3,
+    })
+    expect(tokenThroughputLabel(state.throughput, T0 + 1_300)).toBe('⚡ 10.0 tok/s')
+  })
+
+  it('waits for a stable sample and calibrates to terminal provider usage', () => {
+    const streaming = foldEvents([
+      turn(0, 'turn/start', 1, T0),
+      { seq: 1, time: T0, type: 'step/start', data: { turn: 1, step: 0 } },
+      { seq: 2, time: T0 + 1_000, type: 'assistant/chunk', data: { turn: 1, step: 0, chunk: { type: 'text-delta', index: 0, text: 'A' } } },
+      { seq: 3, time: T0 + 1_100, type: 'assistant/chunk', data: { turn: 1, step: 0, chunk: { type: 'text-delta', index: 0, text: 'B' } } },
+    ])
+    expect(tokenThroughputLabel(streaming.throughput, T0 + 1_249)).toBeUndefined()
+    const calibrated = foldTranscript(streaming, {
+      seq: 4, time: T0 + 1_200, type: 'assistant/chunk',
+      data: { turn: 1, step: 0, chunk: { type: 'usage', usage: { outputTokens: 5 } } },
+    })
+    expect(calibrated.throughput?.tokenCount).toBe(5)
+    expect(calibrated.throughput?.exact).toBe(true)
+    expect(tokenThroughputLabel(calibrated.throughput, T0 + 1_500)).toBe('⚡ 10.0 tok/s')
+  })
+
+  it('never estimates from untimed chunks, freezes the final average, and resets for the next step', () => {
+    const untimed = foldEvents([
+      turn(0, 'turn/start', 1, T0),
+      { seq: 1, type: 'assistant/chunk', data: { turn: 1, step: 0, chunk: { type: 'text-delta', index: 0, text: 'token' } } },
+    ])
+    expect(untimed.throughput).toBeUndefined()
+
+    const live = foldTranscript(untimed, { seq: 2, time: T0 + 1_000, type: 'assistant/chunk', data: { turn: 1, step: 0, chunk: { type: 'text-delta', index: 0, text: 'A' } } })
+    expect(live.throughput?.tokenCount).toBe(1)
+    const committed = foldTranscript(live, {
+      seq: 3, time: T0 + 1_500, type: 'assistant/message',
+      data: { turn: 1, step: 0, usage: { outputTokens: 2 }, message: { source: { kind: 'model' }, content: [{ type: 'text', text: 'A' }] } },
+    })
+    expect(committed.throughput).toMatchObject({ tokenCount: 2, finishedAt: T0 + 1_500, exact: true })
+    expect(tokenThroughputLabel(committed.throughput, T0 + 99_000)).toBe('⚡ 4.0 tok/s')
+    const ended = foldTranscript(committed, { seq: 4, time: T0 + 2_000, type: 'step/end', data: { turn: 1, step: 0 } })
+    expect(ended.throughput).toEqual(committed.throughput)
+    expect(foldTranscript(ended, { seq: 5, time: T0 + 2_100, type: 'step/start', data: { turn: 1, step: 1 } }).throughput).toBeUndefined()
+    expect(foldTranscript(live, { seq: 3, time: T0 + 2_000, type: 'llm/retry-started', data: { turn: 1, step: 0 } }).throughput).toBeUndefined()
   })
 })

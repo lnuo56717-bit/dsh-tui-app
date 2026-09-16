@@ -16,7 +16,7 @@ import { sessionDetail, sessionLabel, sessionMeta } from './session-picker.js'
 import { resolveTheme, type Theme } from './theme.js'
 import { presentReasoning } from './reasoning-view.js'
 import { transcriptRows, type TranscriptRow } from './transcript-rows.js'
-import { elapsedLabel, settledTiming, SPIN_TICK_MS, THINKING_REST_GLYPH, thinkingFrame } from './timing.js'
+import { elapsedLabel, settledTiming, SPIN_TICK_MS, THINKING_REST_GLYPH, thinkingFrame, tokenThroughputLabel } from './timing.js'
 import { composerCaret } from './cursor.js'
 import { terminalSequences } from './terminal.js'
 import { focusableBlocks, ReasoningDetailView, TranscriptView, viewportWindow, type RowSelection, type TranscriptBlockRef } from './transcript-view.js'
@@ -1086,9 +1086,9 @@ export function Shell(props: ShellProps): React.JSX.Element {
     Math.max(0, transcriptWidth - 2 - displayWidth(transcriptHeading)),
   ).head
   const footerCells = Math.max(1, columns - margin * 2)
-  // The header's right-hand chip stack: the elapsed chip with the cache-hit
-  // rate under it (beside it on one row when the header collapses to compact
-  // mode). The title keeps a minimum cell budget and the chips take the rest,
+  // The header's right-hand metric stack: elapsed time, live provider-token
+  // throughput, then cache hit rate (on one row in compact mode). The title
+  // keeps a minimum cell budget and the metrics take the rest,
   // so the header can never wrap into another row — a taller header would push
   // the frame past the screen and drag the composer's caret with it. A
   // terminal too narrow to keep one readable title beside a chip keeps the
@@ -1097,13 +1097,35 @@ export function Shell(props: ShellProps): React.JSX.Element {
   const elapsedCells = elapsed === undefined ? 0 : displayWidth(elapsed)
   const titleCells = compact ? 18 : 52
   const timingChip = elapsed !== undefined && elapsedCells + 2 + titleCells <= footerCells ? elapsed : undefined
+  // Live samples move with the clock; committed samples carry their own frozen
+  // endpoint and remain as the final average after the agent returns to idle.
+  const throughput = tokenThroughputLabel(state.throughput, clock)
+  const throughputCells = throughput === undefined ? 0 : displayWidth(throughput)
   const cache = cacheHitLabel(runtime)
   const cacheCells = cache === undefined ? 0 : displayWidth(cache)
   const cacheChip = cache !== undefined && cacheCells + 2 + titleCells <= footerCells ? cache : undefined
-  const chipsWidth = timingChip === undefined && cacheChip === undefined ? 0
+  const metricCandidates = [
+    ...(timingChip === undefined ? [] : [{ key: 'timing' as const, label: timingChip, cells: elapsedCells }]),
+    ...(throughput === undefined ? [] : [{ key: 'throughput' as const, label: throughput, cells: throughputCells }]),
+    ...(cacheChip === undefined ? [] : [{ key: 'cache' as const, label: cacheChip, cells: cacheCells }]),
+  ]
+  const compactMetricBudget = Math.max(0, footerCells - titleCells - 2)
+  // At narrow widths the requested live rate wins, then the timer, then cache.
+  // Wide mode has a three-line title block and can stack all three at no cost.
+  const selectedMetricKeys = compact
+    ? ['throughput', 'timing', 'cache'].reduce<string[]>((keys, key) => {
+        const item = metricCandidates.find(candidate => candidate.key === key)
+        if (item === undefined) return keys
+        const used = keys.reduce((sum, selected) => sum + metricCandidates.find(candidate => candidate.key === selected)!.cells, 0)
+        if (used + item.cells + keys.length <= compactMetricBudget) keys.push(key)
+        return keys
+      }, [])
+    : metricCandidates.map(candidate => candidate.key)
+  const metrics = metricCandidates.filter(candidate => selectedMetricKeys.includes(candidate.key))
+  const chipsWidth = metrics.length === 0 ? 0
     : compact
-      ? (timingChip === undefined ? 0 : elapsedCells) + (cacheChip === undefined ? 0 : cacheCells + 1) + 2
-      : Math.max(timingChip === undefined ? 0 : elapsedCells, cacheChip === undefined ? 0 : cacheCells) + 2
+      ? metrics.reduce((sum, metric) => sum + metric.cells, 0) + metrics.length - 1 + 2
+      : Math.max(...metrics.map(metric => metric.cells)) + 2
   const statusLine = formatFooter(runtime, runtime.error ?? runtime.notice, footerCells, !veryNarrow)
   const help = runtime.approval !== undefined
     ? 'y allow · n reject · Esc park'
@@ -1133,10 +1155,11 @@ export function Shell(props: ShellProps): React.JSX.Element {
           {!compact && <Text color={theme.accent} wrap="truncate">Abyss Workbench · {theme.name}</Text>}
           {!compact && <Text color={theme.muted} wrap="truncate">{middleEllipsis(`Harness-native model + reasoning controls · ${title}`, Math.max(8, columns - 40 - chipsWidth))}</Text>}
         </Box>
-        {(timingChip !== undefined || cacheChip !== undefined) && (
+        {metrics.length > 0 && (
           <Box marginLeft={2} flexShrink={0} flexDirection={compact ? 'row' : 'column'} justifyContent="center">
-            {timingChip !== undefined && <Text bold color={theme.accent}>{timingChip}</Text>}
-            {cacheChip !== undefined && <Text color={theme.muted}>{compact ? ` ${cacheChip}` : cacheChip}</Text>}
+            {metrics.map((metric, index) => <Text key={metric.key} bold={metric.key !== 'cache'} color={metric.key === 'cache' ? theme.muted : metric.key === 'throughput' ? theme.primary : theme.accent}>
+              {compact && index > 0 ? ' ' : ''}{metric.label}
+            </Text>)}
           </Box>
         )}
       </Box>

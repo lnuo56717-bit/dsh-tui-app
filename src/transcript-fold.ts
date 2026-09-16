@@ -115,6 +115,25 @@ export interface TurnTiming {
 
 export const NO_TIMING: TurnTiming = Object.freeze({ measured: 0, workMs: 0 })
 
+/**
+ * Output tokens observed on the provider stream for the step currently being
+ * generated. Harness preserves provider token boundaries in delta events, so
+ * this is a live count rather than a character or byte estimate. The provider
+ * can reveal a slightly larger billed total in the terminal usage event (for
+ * invisible protocol tokens); that total replaces the observed count when it
+ * arrives.
+ */
+export interface LiveTokenThroughput {
+  readonly turn: number
+  readonly step: number
+  readonly firstTokenAt: number
+  readonly lastTokenAt: number
+  readonly tokenCount: number
+  /** Freezes the denominator once the assistant message commits. */
+  readonly finishedAt?: number
+  readonly exact?: true
+}
+
 export interface TranscriptState {
   readonly lastSeq: number
   readonly nodes: readonly TranscriptNode[]
@@ -126,6 +145,7 @@ export interface TranscriptState {
   readonly metadata: Readonly<Record<string, unknown>>
   readonly diagnostics: readonly { readonly seq: number; readonly type: string; readonly data: unknown }[]
   readonly timing: TurnTiming
+  readonly throughput?: LiveTokenThroughput
   readonly gap?: { readonly expected: number; readonly received: number }
 }
 
@@ -191,6 +211,69 @@ function normalizeBlocks(value: unknown): TranscriptBlock[] {
 
 function pairKey(turn: unknown, step: unknown): string {
   return `${number(turn)}:${number(step)}`
+}
+
+function eventTime(event: EventLike): number | undefined {
+  return typeof event.time === 'number' && Number.isFinite(event.time) ? event.time : undefined
+}
+
+function usageOutputTokens(value: unknown): number | undefined {
+  const outputTokens = record(value).outputTokens
+  return typeof outputTokens === 'number' && Number.isFinite(outputTokens) && outputTokens >= 0
+    ? outputTokens
+    : undefined
+}
+
+function isObservedTokenChunk(chunk: Readonly<Record<string, unknown>>, index: number): boolean {
+  if (index < 0) return false
+  if (chunk.type === 'text-delta' || chunk.type === 'reasoning-delta') return string(chunk.text) !== ''
+  if (chunk.type === 'tool-call-delta') return string(chunk.argumentsDelta) !== '' || chunk.name !== undefined
+  return false
+}
+
+function foldThroughputChunk(
+  state: TranscriptState,
+  event: EventLike,
+  data: Readonly<Record<string, unknown>>,
+  chunk: Readonly<Record<string, unknown>>,
+  index: number,
+): LiveTokenThroughput | undefined {
+  const turn = number(data.turn)
+  const step = number(data.step)
+  const previous = state.throughput
+  const matching = previous?.turn === turn && previous.step === step ? previous : undefined
+
+  if (chunk.type === 'usage') {
+    const exact = usageOutputTokens(chunk.usage)
+    return matching === undefined || exact === undefined
+      ? previous
+      : { ...matching, tokenCount: exact, exact: true }
+  }
+  if (!isObservedTokenChunk(chunk, index)) return previous
+  const at = eventTime(event)
+  if (at === undefined) return previous
+  if (matching === undefined) {
+    return { turn, step, firstTokenAt: at, lastTokenAt: at, tokenCount: 1 }
+  }
+  return {
+    ...matching,
+    lastTokenAt: Math.max(matching.lastTokenAt, at),
+    tokenCount: matching.tokenCount + 1,
+  }
+}
+
+function withoutThroughput(state: TranscriptState): Omit<TranscriptState, 'throughput'> {
+  const { throughput: _throughput, ...rest } = state
+  return rest
+}
+
+function finishThroughput(state: TranscriptState, event: EventLike): LiveTokenThroughput | undefined {
+  const sample = state.throughput
+  if (sample === undefined || sample.finishedAt !== undefined) return sample
+  const data = record(event.data)
+  if (sample.turn !== number(data.turn) || sample.step !== number(data.step)) return sample
+  const finishedAt = Math.max(sample.firstTokenAt, eventTime(event) ?? sample.lastTokenAt)
+  return { ...sample, finishedAt }
 }
 
 function sameSeqSet(left: readonly number[], right: readonly number[]): boolean {
@@ -266,6 +349,7 @@ function foldChunk(state: TranscriptState, event: EventLike): TranscriptState {
   const previous = state.partials[key] ?? { nodeId, blocks: [], sourceSeqs: [] }
   const chunk = record(data.chunk)
   const index = number(chunk.index, -1)
+  const throughput = foldThroughputChunk(state, event, data, chunk, index)
   let blocks = [...previous.blocks]
   let usage = previous.usage
   let finish = previous.finish
@@ -327,7 +411,13 @@ function foldChunk(state: TranscriptState, event: EventLike): TranscriptState {
     turn: number(data.turn), step: number(data.step),
     ...(usage === undefined ? {} : { usage }), ...(finish === undefined ? {} : { finish }),
   }
-  return { ...state, lastSeq: event.seq, nodes: replaceNode(state.nodes, node), partials: { ...state.partials, [key]: partial } }
+  return {
+    ...state,
+    lastSeq: event.seq,
+    nodes: replaceNode(state.nodes, node),
+    partials: { ...state.partials, [key]: partial },
+    ...(throughput === undefined ? {} : { throughput }),
+  }
 }
 
 function foldAssistantMessage(state: TranscriptState, event: EventLike): TranscriptState {
@@ -350,12 +440,24 @@ function foldAssistantMessage(state: TranscriptState, event: EventLike): Transcr
   const finalizedPairs = new Set(state.finalizedPairs)
   finalizedPairs.add(key)
   if (matchedKey !== undefined) finalizedPairs.add(matchedKey)
+  const providerCount = usageOutputTokens(data.usage)
+  const matchingThroughput = state.throughput?.turn === number(data.turn) && state.throughput.step === number(data.step)
+    ? state.throughput
+    : undefined
+  const throughput = matchingThroughput === undefined
+    ? state.throughput
+    : {
+        ...matchingThroughput,
+        finishedAt: Math.max(matchingThroughput.firstTokenAt, eventTime(event) ?? matchingThroughput.lastTokenAt),
+        ...(providerCount === undefined ? {} : { tokenCount: providerCount, exact: true as const }),
+      }
   let next: TranscriptState = {
     ...state,
     lastSeq: event.seq,
     nodes: replaceNode(state.nodes, node),
     partials,
     finalizedPairs: [...finalizedPairs],
+    ...(throughput === undefined ? {} : { throughput }),
   }
   const placed = placeSurface(next, event, nodeId)
   next = { ...next, ...placed }
@@ -494,18 +596,21 @@ function foldActivity(state: TranscriptState, event: EventLike): TranscriptState
  */
 function foldTurnBoundary(state: TranscriptState, event: EventLike): TranscriptState {
   const turn = number(record(event.data).turn)
-  const at = typeof event.time === 'number' && Number.isFinite(event.time) ? event.time : undefined
+  const at = eventTime(event)
+  // A new turn starts a new measurement. Its closing boundary keeps the final
+  // sample visible while the completed conversation is idle.
+  const base = event.type === 'turn/start' ? withoutThroughput(state) : state
   const { open, ...settled } = state.timing
   if (event.type === 'turn/start') {
-    return { ...state, lastSeq: event.seq, timing: at === undefined ? settled : { ...settled, open: { turn, startedAt: at } } }
+    return { ...base, lastSeq: event.seq, timing: at === undefined ? settled : { ...settled, open: { turn, startedAt: at } } }
   }
-  if (open === undefined || open.turn !== turn || at === undefined) return { ...state, lastSeq: event.seq, timing: settled }
+  if (open === undefined || open.turn !== turn || at === undefined) return { ...base, lastSeq: event.seq, timing: settled }
   // A crash-repaired closer reuses the last real event's timestamp, so a span
   // is never negative in practice; clamping keeps a skewed clock from lying.
   const span = Math.max(0, at - open.startedAt)
   const reason = string(record(record(event.data).reason).kind)
   return {
-    ...state,
+    ...base,
     lastSeq: event.seq,
     timing: {
       measured: settled.measured + 1,
@@ -534,6 +639,11 @@ export function foldTranscript(state: TranscriptState, event: EventLike): Transc
   switch (event.type) {
     case 'turn/start':
     case 'turn/end': return foldTurnBoundary(state, event)
+    case 'step/start': return { ...withoutThroughput(state), lastSeq: event.seq }
+    case 'step/end': {
+      const throughput = finishThroughput(state, event)
+      return { ...state, lastSeq: event.seq, ...(throughput === undefined ? {} : { throughput }) }
+    }
     case 'user/message': return foldUserMessage(state, event)
     case 'assistant/chunk': return foldChunk(state, event)
     case 'assistant/message': return foldAssistantMessage(state, event)
@@ -552,7 +662,7 @@ export function foldTranscript(state: TranscriptState, event: EventLike): Transc
     case 'hook/invoked':
     case 'hook/result':
     case 'llm/retry':
-    case 'llm/retry-started': return foldActivity(state, event)
+    case 'llm/retry-started': return foldActivity(withoutThroughput(state), event)
     case 'todo/write':
     case 'request/header':
     case 'request/context':

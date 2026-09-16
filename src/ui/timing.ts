@@ -1,4 +1,4 @@
-import type { TurnTiming } from '../transcript-fold.js'
+import type { LiveTokenThroughput, TurnTiming } from '../transcript-fold.js'
 
 /** Marks the elapsed-time chip in the chrome; width-1 like the rest of the geometry set. */
 export const TIMER_GLYPH = '◷'
@@ -15,6 +15,9 @@ export const SPIN_FRAMES = [...'⠁⠁⠉⠙⠚⠒⠂⠂⠒⠲⠴⠤⠄⠄⠤⠠
 
 /** How often the live spinner advances. Matches Grok's cadence; the elapsed chip still floors to seconds. */
 export const SPIN_TICK_MS = 80
+
+/** Avoid a meaningless flash of infinity before a useful sample window exists. */
+export const MIN_THROUGHPUT_SAMPLE_MS = 250
 
 /**
  * The spinner frame for `now`. Derived from the clock, not from view state, so
@@ -83,4 +86,18 @@ export function elapsedLabel(timing: TurnTiming, now: number, detail = true): st
   return detail
     ? `${TIMER_GLYPH} last ${formatElapsed(facts.lastMs)} · total ${formatElapsed(facts.totalMs)}`
     : `${TIMER_GLYPH} total ${formatElapsed(facts.totalMs)}`
+}
+
+/**
+ * Live cumulative output rate for the current model step. `tokenCount` comes
+ * from provider token-boundary deltas, never from characters; terminal usage
+ * may calibrate it to the provider's exact billed count.
+ */
+export function tokenThroughputLabel(sample: LiveTokenThroughput | undefined, now: number): string | undefined {
+  if (sample === undefined || sample.tokenCount <= 0) return undefined
+  const elapsed = (sample.finishedAt ?? Math.max(now, sample.lastTokenAt)) - sample.firstTokenAt
+  if (!Number.isFinite(elapsed) || elapsed <= 0) return undefined
+  if (sample.finishedAt === undefined && elapsed < MIN_THROUGHPUT_SAMPLE_MS) return undefined
+  const rate = sample.tokenCount / (elapsed / 1_000)
+  return Number.isFinite(rate) ? `⚡ ${rate.toFixed(1)} tok/s` : undefined
 }
