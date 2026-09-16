@@ -1,3 +1,5 @@
+import { expandAssistantStream, type AssistantStreamRecord } from '@deepseek-ai/dsh-llm'
+
 export interface EventLike {
   readonly type: string
   readonly seq: number
@@ -163,13 +165,14 @@ export const EMPTY_TRANSCRIPT: TranscriptState = Object.freeze({
 })
 
 export const KNOWN_EVENT_TYPES = [
-  'turn/start', 'turn/end', 'step/start', 'step/end', 'user/message', 'assistant/chunk', 'assistant/message',
+  'turn/start', 'turn/end', 'step/start', 'step/end', 'user/message', 'system/message', 'assistant/chunk', 'assistant/message',
+  'assistant/attempt',
   'tool/call', 'tool/result', 'tool/code-dispatch-start', 'tool/code-dispatch', 'todo/write', 'request/header',
   'request/context', 'session/end-seed', 'agent-preset/selected', 'agent/inbox/spliced', 'approval/asked',
   'approval/decided', 'approval/policy', 'permission/preset', 'sandbox/mode', 'plan/mode', 'command/run',
   'command/done', 'compaction/start', 'compaction/summary', 'compaction/end', 'compaction/prune', 'feedback/record',
   'goal/change', 'hook/invoked', 'hook/result', 'llm/retry', 'llm/retry-started', 'schedule/change', 'session/title',
-  'session/title-llm-request', 'subagent/descriptor', 'tool-workflow/run-start', 'tool-workflow/agent-start',
+  'session/title-llm-request', 'subagent/descriptor', 'image/offload', 'tool-workflow/run-start', 'tool-workflow/agent-start',
   'tool-workflow/agent-end', 'tool-workflow/run-end', 'web/deepseek-search-llm-request',
 ] as const
 
@@ -444,8 +447,9 @@ function foldAssistantMessage(state: TranscriptState, event: EventLike): Transcr
   const matchingThroughput = state.throughput?.turn === number(data.turn) && state.throughput.step === number(data.step)
     ? state.throughput
     : undefined
+  const recordedThroughput = matchingThroughput === undefined ? throughputFromStream(data, event) : undefined
   const throughput = matchingThroughput === undefined
-    ? state.throughput
+    ? recordedThroughput ?? state.throughput
     : {
         ...matchingThroughput,
         finishedAt: Math.max(matchingThroughput.firstTokenAt, eventTime(event) ?? matchingThroughput.lastTokenAt),
@@ -462,6 +466,43 @@ function foldAssistantMessage(state: TranscriptState, event: EventLike): Transcr
   const placed = placeSurface(next, event, nodeId)
   next = { ...next, ...placed }
   return next
+}
+
+/** Reconstruct final throughput when a v3 durable message is loaded without its transient live frames. */
+function throughputFromStream(data: Readonly<Record<string, unknown>>, event: EventLike): LiveTokenThroughput | undefined {
+  if (!Array.isArray(data.stream)) return undefined
+  let expanded: ReturnType<typeof expandAssistantStream>
+  try { expanded = expandAssistantStream(data.stream as AssistantStreamRecord[]) } catch { return undefined }
+  const samples = expanded.map(sample => ({ time: sample.time, chunk: record(sample.chunk) }))
+  const observed = samples.filter(sample => isObservedTokenChunk(sample.chunk, number(sample.chunk.index, -1)))
+  if (observed.length === 0) return undefined
+  const firstTokenAt = observed[0]!.time
+  const lastTokenAt = observed.at(-1)!.time
+  const exact = usageOutputTokens(data.usage)
+  return {
+    turn: number(data.turn),
+    step: number(data.step),
+    firstTokenAt,
+    lastTokenAt,
+    tokenCount: exact ?? observed.length,
+    finishedAt: Math.max(firstTokenAt, eventTime(event) ?? lastTokenAt),
+    ...(exact === undefined ? {} : { exact: true }),
+  }
+}
+
+/** Apply a process-local v3 assistant frame without consuming a durable Session seq. */
+export function foldLiveAssistantChunk(
+  state: TranscriptState,
+  input: { readonly turn: number; readonly step: number; readonly time: number; readonly chunk: unknown },
+): TranscriptState {
+  const lastSeq = state.lastSeq
+  const next = foldChunk(state, {
+    type: 'assistant/chunk',
+    seq: lastSeq + 1,
+    time: input.time,
+    data: { turn: input.turn, step: input.step, chunk: input.chunk },
+  })
+  return { ...next, lastSeq }
 }
 
 function foldUserMessage(state: TranscriptState, event: EventLike): TranscriptState {
@@ -645,8 +686,10 @@ export function foldTranscript(state: TranscriptState, event: EventLike): Transc
       return { ...state, lastSeq: event.seq, ...(throughput === undefined ? {} : { throughput }) }
     }
     case 'user/message': return foldUserMessage(state, event)
+    case 'system/message': return { ...state, lastSeq: event.seq }
     case 'assistant/chunk': return foldChunk(state, event)
     case 'assistant/message': return foldAssistantMessage(state, event)
+    case 'assistant/attempt': return { ...state, lastSeq: event.seq }
     case 'tool/call': return foldToolCall(state, event)
     case 'tool/result': return foldToolResult(state, event)
     case 'tool/code-dispatch-start':
@@ -675,7 +718,8 @@ export function foldTranscript(state: TranscriptState, event: EventLike): Transc
     case 'plan/mode':
     case 'goal/change':
     case 'session/title':
-    case 'subagent/descriptor': return updateMetadata(state, event)
+    case 'subagent/descriptor':
+    case 'image/offload': return updateMetadata(state, event)
     default: return { ...state, lastSeq: event.seq }
   }
 }

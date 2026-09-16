@@ -15,8 +15,8 @@ export function isVisionModelId(id: string): boolean {
 
 /**
  * Stamp image input on official (and similarly named) vision models.
- * rc.5's DeepSeek adapter hard-codes text-only, so the TUI overlay restores
- * the catalog claim that Harness 0.1.1 ships natively.
+ * Older DeepSeek adapters hard-code text-only, so the compatibility overlay
+ * restores the known catalog claim. Native image declarations are preserved.
  */
 export function stampVisionModel<T extends ModalityModel>(model: T): T {
   if (!isVisionModelId(model.id)) return model

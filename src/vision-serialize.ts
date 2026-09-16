@@ -1,8 +1,8 @@
 /**
- * Image-capable DeepSeek chat-completions serialization for the rc.5 adapter
- * overlay. Text-only history stays on string user content; image history uses
+ * Image-capable DeepSeek chat-completions serialization for the legacy adapter
+ * fallback. Text-only history stays on string user content; image history uses
  * ordered data-URL parts. Tool-result images follow their string tool messages
- * in a separate user message, matching Harness 0.1.1-rc.1.
+ * in a separate user message.
  */
 import type { ContentBlock, GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
 import { contentHasImage, LlmError } from '@deepseek-ai/dsh-llm'

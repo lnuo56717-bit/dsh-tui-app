@@ -24,4 +24,23 @@ describe('llm-vision adapter wrap', () => {
     const resolved = await adapter.resolveModel('deepseek-official', VISION_MODEL_ID)
     expect(resolved.inputModalities).toEqual(['text', 'image'])
   })
+
+  it('delegates image requests unchanged when the current adapter is native', async () => {
+    let streamed = false
+    const adapter = {
+      async listModels() { return [] },
+      async resolveModel(_provider: string, model: string) {
+        return { provider: 'deepseek-official', id: model, name: model, inputModalities: ['text', 'image'] as const }
+      },
+      async *stream() { streamed = true },
+    }
+    wrapDeepSeekAdapter(adapter, {} as Context)
+    for await (const _chunk of adapter.stream({
+      provider: 'deepseek-official', model: VISION_MODEL_ID,
+      messages: [{ role: 'user', source: { kind: 'user' }, content: [{
+        type: 'image', attachment: { attachmentId: 'image-1', mediaType: 'image/png', bytes: 1, width: 1, height: 1 },
+      }] }],
+    } as never)) { /* no-op */ }
+    expect(streamed).toBe(true)
+  })
 })

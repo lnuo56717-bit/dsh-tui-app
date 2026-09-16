@@ -1,6 +1,7 @@
 /**
- * Overlay the installed rc.5 DeepSeek adapter with vision catalog claims and
- * image-capable serialization, without replacing the Harness package.
+ * Compatibility overlay for pre-native DeepSeek vision adapters. A current
+ * Harness adapter that already advertises image input always keeps ownership
+ * of serialization and transport.
  */
 import type { Context } from '@deepseek-ai/cordis'
 import { attributionHeaders, contentHasImage, LlmError } from '@deepseek-ai/dsh-llm'
@@ -64,6 +65,11 @@ export function wrapDeepSeekAdapter(adapter: DeepSeekAdapterLike, ctx: Context):
   adapter.stream = async function* (options: GenerateOptions): AsyncIterable<StreamChunk> {
     const hasImages = options.messages.some(message => contentHasImage(message.content))
     if (!hasImages) {
+      yield* originalStream(options)
+      return
+    }
+    const native = await originalResolve(options.provider, options.model, options.signal)
+    if (native.inputModalities?.includes('image') === true) {
       yield* originalStream(options)
       return
     }

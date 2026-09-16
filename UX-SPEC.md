@@ -1,6 +1,6 @@
 # dsh-tui UX Specification
 
-Status: final for M0. The interaction reference is grok-build `eb267feff13129e568df38fb6fdf0ceb65f735d6`; every adopted action below is remapped to the real dsh rc.6 seams in `INTERFACES.md`.
+Status: original M0 interaction baseline, retained after the `dsh-v0.1.6-alpha.1` compatibility upgrade. The interaction reference is grok-build `eb267feff13129e568df38fb6fdf0ceb65f735d6`; current host seams and deviations are recorded in `PROVENANCE.md`.
 
 ## 1. Design direction: Abyss Workbench
 
@@ -168,7 +168,7 @@ Typing `/` opens a fuzzy menu combining `ctx.commands.list(agent)` with local TU
 | `/rename` | local | `sessionTitle.rename` |
 | `/plan [on\|off]` | adopt if dsh descriptor is present, otherwise mapped local action | `planMode.set`; status reflects committed vs queued |
 | `/always-approve` | compatibility alias | selects `danger-full-access` only after showing that it changes both sandbox and approval policy; running it again does not invent a Grok toggle |
-| `/auto` | omit | dsh rc.6 has no classifier/auto policy |
+| `/auto` | omit | newer host automation/review authority is not exposed without a dedicated TUI safety design |
 | `/view-plan` | omit | dsh projection exposes active/pending state, not a durable Grok plan file; plan review remains in the real question card/transcript |
 | `/workflows` | P1 read-only | current workflow/jobs list only; no dashboard control invented |
 | `/dashboard` | omit | multi-root dashboard is a v1 non-goal |

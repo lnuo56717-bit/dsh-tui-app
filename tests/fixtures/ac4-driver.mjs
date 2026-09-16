@@ -39,7 +39,8 @@ export function apply(ctx) {
       }, { surfaceOp: 'append' })
       session.append('step/end', { turn: 1, step: 1 })
       session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
-      const approvalEvents = session.events.filter(event => event.type === 'approval/asked' || event.type === 'approval/decided')
+      const events = typeof session.snapshotEvents === 'function' ? session.snapshotEvents() : session.events
+      const approvalEvents = events.filter(event => event.type === 'approval/asked' || event.type === 'approval/decided')
       writeFileSync(auditPath, JSON.stringify({
         mode, outcome, targetExists: existsSync(target),
         approvalEvents: approvalEvents.map(event => ({ type: event.type, data: event.data })),

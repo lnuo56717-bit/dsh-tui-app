@@ -20,6 +20,10 @@ function sharedSnapshot() {
 
 const before = sharedSnapshot()
 const env = { ...process.env, DSH_HOME: home, TERM: 'xterm-256color', COLORTERM: '' }
+// This case explicitly verifies the 256-color tier. Keep ambient runner
+// preferences from silently turning it into the separate NO_COLOR case.
+delete env.NO_COLOR
+delete env.FORCE_COLOR
 const install = spawnSync('cmd.exe', ['/d', '/s', '/c', `dsh plugin --profile tui add "${root}"`], { cwd: root, env, encoding: 'utf8' })
 if (install.status !== 0) throw new Error(`profile install exited ${install.status}: ${install.stderr}`)
 let capture = ''

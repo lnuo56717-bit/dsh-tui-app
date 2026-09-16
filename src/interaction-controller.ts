@@ -1,11 +1,11 @@
 import type { Context } from '@deepseek-ai/cordis'
 import {
-  installModelSelection, type Agent, type AgentHandle, type ModelSelection, type ModelSelectionRef,
+  installModelSelection, type Agent, type AgentHandle, type CreateAgentOptions, type ModelSelection, type ModelSelectionRef,
 } from '@deepseek-ai/dsh-agent'
 import { randomUUID } from 'node:crypto'
 import { rm } from 'node:fs/promises'
 import { dirname } from 'node:path'
-import { SessionId, type SessionEvent, type SessionHeader, type UserMessage } from '@deepseek-ai/dsh-session'
+import { SessionId, SessionLogOffset, type SessionEvent, type SessionHeader, type UserMessage } from '@deepseek-ai/dsh-session'
 import {
   attachProjections, type AttachedProjections, type ProjectionRegistryLike, type ProjectionSnapshotView,
 } from './projection-store.js'
@@ -18,6 +18,7 @@ import { attachTranscript, TranscriptStore, type AttachedTranscript } from './tr
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { loadClipboardImage, loadImageFile, unquotePath, type LoadedImage } from './image-input.js'
 import { VISION_MODEL_ID } from './vision-models.js'
+import { eventLikes, sessionEventLikes, sessionEvents } from './harness-compat.js'
 
 export type ApprovalOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'
 
@@ -156,11 +157,20 @@ interface QuestionsPending {
 interface ApprovalContext {
   on(name: 'approval/request', listener: (request: ApprovalRequestLike, next: () => Promise<ApprovalOutcome>) => Promise<ApprovalOutcome>): () => void
   on(name: 'agent/status', listener: (payload: { agent: Agent; status: 'idle' | 'running' }) => void): () => void
+  on(name: 'user-questions/request', listener: (
+    request: QuestionRequestLike,
+    next: () => Promise<{ answers: QuestionAnswerItem[] }>,
+  ) => Promise<{ answers: QuestionAnswerItem[] }>): () => void
 }
 
 interface CommandService {
   list(agent: Agent): readonly { name: string; description: string; input?: { hint: string } }[]
-  execute(agent: Agent, line: string, signal: AbortSignal): Promise<{ result: { kind: 'success' | 'error'; text?: string } } | undefined>
+  execute(
+    agent: Agent,
+    line: string,
+    attachmentsOrSignal: readonly unknown[] | AbortSignal,
+    signal?: AbortSignal,
+  ): Promise<{ result: { kind: 'success' | 'error'; text?: string } } | undefined>
 }
 
 interface StoredLog {
@@ -168,7 +178,13 @@ interface StoredLog {
   readonly events: readonly EventLike[]
 }
 interface PersistenceService {
-  list(signal?: AbortSignal): Promise<SessionHeader[]>
+  list(options?: AbortSignal | { readonly signal?: AbortSignal }): Promise<readonly (SessionHeader | { readonly header: SessionHeader })[]>
+  /** Session V3 read API. The returned handle must always be closed. */
+  open?(id: ReturnType<typeof SessionId>, access: 'read', options?: { readonly signal?: AbortSignal }): Promise<{
+    readonly header: SessionHeader
+    read(offset?: number, length?: number, options?: { readonly signal?: AbortSignal }): Promise<{ readonly events: readonly SessionEvent[] }>
+    close(): Promise<void>
+  }>
   /** Detached non-mutating suffix read; preferred for read-only picker facts. */
   readFrom?(id: ReturnType<typeof SessionId>, fromSeq: number, signal?: AbortSignal): Promise<StoredLog>
   /** Immutable logical view; used when a backend predates `readFrom`. */
@@ -180,11 +196,12 @@ interface PersistenceService {
 }
 interface PermissionService {
   readonly names: readonly string[]
-  current(events: Agent['session']['events']): string
+  current(subject: Agent['session'] | readonly SessionEvent[]): string
   set(session: Agent['session'], name: string): void
 }
 interface QuestionService {
-  registerProvider(provider: { ask(request: QuestionRequestLike): Promise<{ answers: QuestionAnswerItem[] }> }): () => void
+  /** Pre-v3 provider seam retained for staged host upgrades. */
+  registerProvider?(provider: { ask(request: QuestionRequestLike): Promise<{ answers: QuestionAnswerItem[] }> }): () => void
 }
 interface TitleService { rename(session: Agent['session'], title: string): unknown }
 interface DefaultModelService {
@@ -318,7 +335,9 @@ export class InteractionController {
   async start(resume?: string): Promise<void> {
     if (resume !== undefined && resume.trim() === '') throw new Error('resume session id must be non-empty')
     const questions = this.ctx.get('userQuestions') as QuestionService | undefined
-    if (questions !== undefined) this.questionProviderDispose = questions.registerProvider({ ask: request => this.askQuestions(request) })
+    if (questions?.registerProvider !== undefined) {
+      this.questionProviderDispose = questions.registerProvider({ ask: request => this.askQuestions(request) })
+    }
     try {
       await this.open(resume)
       this.accepting = true
@@ -379,11 +398,14 @@ export class InteractionController {
       assembled: undefined,
     }
     const seed = selected.current ?? fallback.currentSelection()
-    const setup = (agentCtx: Context): void => {
-      scopedAgent = (agentCtx as Context & { agent?: Agent }).agent
+    const setup = (agentCtx: Context, agent?: Agent): void => {
+      scopedAgent = agent ?? (agentCtx as Context & { agent?: Agent }).agent
       installModelSelection(agentCtx, selected)
       const scoped = agentCtx as unknown as ApprovalContext
       scoped.on('approval/request', (request, next) => this.askApproval(request, next))
+      scoped.on('user-questions/request', (request, next) => (
+        request.agent === scopedAgent ? this.askQuestions(request) : next()
+      ))
       scoped.on('agent/status', ({ agent, status }) => {
         if (agent === this.handle?.agent || String(agent.id) === this.snapshot.sessionId) this.patch({ agentStatus: status })
       })
@@ -403,12 +425,18 @@ export class InteractionController {
       if (resume === undefined) throw error
       const recovered = await this.repairedSeed(resume)
       if (recovered === undefined) throw error
-      handle = await agents.create({
+      const persistence = this.ctx.get('sessionPersistence') as PersistenceService | undefined
+      const legacyRecovery = persistence?.readRaw !== undefined && persistence.open === undefined
+      const recoveryOptions = {
         sessionId: SessionId(`session-${randomUUID()}`),
         seed: recovered,
-        meta: { cwd: process.cwd(), parentSession: SessionId(resume), seedLength: recovered.length },
+        meta: legacyRecovery
+          ? { cwd: process.cwd(), parentSession: SessionId(resume), seedLength: recovered.length }
+          : { cwd: process.cwd(), parentSession: SessionId(resume), isSeeded: true },
+        ...(legacyRecovery ? {} : { inheritedEventCount: SessionLogOffset(recovered.length) }),
         agentOptions: { provider: seed.provider, model: seed.model }, setup,
-      })
+      } as unknown as CreateAgentOptions
+      handle = await agents.create(recoveryOptions)
       notice = 'Opened a repaired copy — the stored log has a seq gap'
     }
     await handle.agent.whenIdle()
@@ -420,7 +448,7 @@ export class InteractionController {
     this.runningDrafts = []
     this.imageInput = info?.inputModalities?.includes('image') === true
     this.handle = handle
-    this.attached = attachTranscript(handle.agent.ctx, handle.agent.session, this.transcript)
+    this.attached = attachTranscript(handle.agent.ctx, handle.agent.session, this.transcript, handle.agent)
     const projectionRegistry = this.ctx.get('sessionProjections') as ProjectionRegistryLike<Agent['session']> | undefined
     if (projectionRegistry !== undefined) {
       this.projections = attachProjections(projectionRegistry, handle.agent.session, projection => this.patch({ projection }))
@@ -629,7 +657,10 @@ export class InteractionController {
       const agent = this.handle?.agent
       const service = this.ctx.get('commands') as CommandService | undefined
       if (agent === undefined || service === undefined) return this.fail('Command service is unavailable')
-      const result = await service.execute(agent, line, new AbortController().signal)
+      const signal = new AbortController().signal
+      const result = service.execute.length >= 4
+        ? await service.execute(agent, line, [], signal)
+        : await service.execute(agent, line, signal)
       if (result === undefined) return this.fail(`Unknown dsh command: /${name}`)
       this.patch(result.result.kind === 'error' ? { error: result.result.text ?? `/${name} failed` } : { notice: result.result.text ?? `/${name} completed`, error: undefined })
       return 'none'
@@ -684,7 +715,7 @@ export class InteractionController {
     if (name === 'workflows') {
       return 'workflows'
     }
-    if (name === 'auto' || name === 'view-plan' || name === 'dashboard') return this.fail(`/${name} is not available in dsh rc.6`)
+    if (name === 'auto' || name === 'view-plan' || name === 'dashboard') return this.fail(`/${name} is not exposed by this TUI`)
     return this.fail(`Unknown local command: /${name}`)
   }
 
@@ -694,9 +725,12 @@ export class InteractionController {
     const rows = await persistence.list()
     // The live log keeps growing, so its folded summary must not be reused.
     if (this.snapshot.sessionId !== undefined) this.summaries.delete(this.snapshot.sessionId)
-    const items = rows.map(header => ({
-      id: String(header.id), cwd: header.cwd, createdAt: header.createdAt, current: String(header.id) === this.snapshot.sessionId,
-    }))
+    const items = rows.map(row => {
+      const header = 'header' in row ? row.header : row
+      return ({
+        id: String(header.id), cwd: header.cwd, createdAt: header.createdAt, current: String(header.id) === this.snapshot.sessionId,
+      })
+    })
     // Order by last activity — the folded log's newest event — not by creation
     // time, so a long-idle conversation sinks below one touched moments ago.
     // Folding every persisted log costs one read per session, but the folded
@@ -709,7 +743,7 @@ export class InteractionController {
       .sort((left, right) => right.activity - left.activity)
       .map(entry => entry.item)
       .filter(item => {
-        const live = item.current ? this.handle?.agent.session.events : undefined
+        const live = item.current && this.handle !== undefined ? sessionEventLikes(this.handle.agent.session) : undefined
         const summary = live !== undefined
           ? { id: item.id, ...foldSessionSummary(live) }
           : this.summaries.get(item.id)
@@ -743,11 +777,21 @@ export class InteractionController {
     let summary: SessionSummary
     try {
       if (persistence === undefined) throw new Error('Session persistence is unavailable')
-      const stored = persistence.readFrom !== undefined
-        ? await persistence.readFrom(SessionId(id), 0, signal)
-        : persistence.inspect !== undefined ? await persistence.inspect(SessionId(id), signal) : undefined
-      if (stored === undefined) throw new Error('Session persistence exposes no readable log')
-      summary = { id, ...foldSessionSummary(stored.events) }
+      if (persistence.open !== undefined) {
+        const handle = await persistence.open(SessionId(id), 'read', signal === undefined ? undefined : { signal })
+        try {
+          const stored = await handle.read(0, undefined, signal === undefined ? undefined : { signal })
+          summary = { id, ...foldSessionSummary(eventLikes(stored.events)) }
+        } finally {
+          await handle.close()
+        }
+      } else {
+        const stored = persistence.readFrom !== undefined
+          ? await persistence.readFrom(SessionId(id), 0, signal)
+          : persistence.inspect !== undefined ? await persistence.inspect(SessionId(id), signal) : undefined
+        if (stored === undefined) throw new Error('Session persistence exposes no readable log')
+        summary = { id, ...foldSessionSummary(stored.events) }
+      }
     } catch (error) {
       // The strict event read rejected the log (e.g. an interleaved seq run).
       // The backend's own raw artifact still carries the durable title and
@@ -906,7 +950,11 @@ export class InteractionController {
   }
 
   permissionNames(): readonly string[] {
-    return (this.ctx.get('permissionPresets') as PermissionService | undefined)?.names ?? []
+    // `auto` is a current-session review integration with danger-full-access +
+    // never semantics. This TUI has no review surface, so it must not offer a
+    // control that enables that authority indirectly through the catalog.
+    return ((this.ctx.get('permissionPresets') as PermissionService | undefined)?.names ?? [])
+      .filter(name => name !== 'auto')
   }
 
   selectPermission(name: string): boolean {
@@ -915,7 +963,7 @@ export class InteractionController {
     if (permissions === undefined || session === undefined) { this.fail('Permission presets are unavailable'); return false }
     try {
       permissions.set(session, name)
-      this.patch({ permission: permissions.current(session.events), notice: `Permission preset: ${name}`, error: undefined })
+      this.patch({ permission: this.permissionCurrent(permissions, session), notice: `Permission preset: ${name}`, error: undefined })
       return true
     } catch (error) {
       this.fail(error instanceof Error ? error.message : String(error))
@@ -1001,7 +1049,16 @@ export class InteractionController {
 
   private currentPermission(): string | undefined {
     const permissions = this.ctx.get('permissionPresets') as PermissionService | undefined
-    return permissions === undefined || this.handle === undefined ? undefined : permissions.current(this.handle.agent.session.events)
+    return permissions === undefined || this.handle === undefined
+      ? undefined
+      : this.permissionCurrent(permissions, this.handle.agent.session)
+  }
+
+  /** v3 derives permission from a Session projection; older hosts folded an event array. */
+  private permissionCurrent(permissions: PermissionService, session: Agent['session']): string {
+    return Number(session.header.version) >= 3
+      ? permissions.current(session)
+      : permissions.current(sessionEvents(session))
   }
 
   private fail(message: string): LocalCommandAction {
@@ -1068,7 +1125,7 @@ export class InteractionController {
   /** Drop the live handle and delete a never-used welcome session so /resume stays clean. */
   private async releaseHandle(): Promise<void> {
     const handle = this.handle
-    const abandoned = handle !== undefined && foldSessionSummary(handle.agent.session.events).prompts === 0
+    const abandoned = handle !== undefined && foldSessionSummary(sessionEventLikes(handle.agent.session)).prompts === 0
     const location = abandoned
       ? (this.ctx.get('sessionPersistence') as PersistenceService | undefined)?.locate?.(handle.agent.session.header)
       : undefined

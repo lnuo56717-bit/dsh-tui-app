@@ -12,6 +12,7 @@ function fixture(over?: { imageInput?: boolean }) {
   const steers: UserMessage[] = []
   const cancels: number[] = []
   const resumed: string[] = []
+  const commandCalls: any[][] = []
   let questionProvider: { ask(request: any): Promise<any> } | undefined
 
   const ctx = {
@@ -50,8 +51,14 @@ function fixture(over?: { imageInput?: boolean }) {
       resume: (options: ResumeAgentOptions) => { resumed.push(String(options.resumeSessionId)); return makeHandle(String(options.resumeSessionId), options.setup) },
     },
     userQuestions: { registerProvider(provider: any) { questionProvider = provider; return () => { questionProvider = undefined } } },
-    commands: { list: () => [{ name: 'plan', description: 'Toggle plan' }, { name: 'resume', description: 'dsh resume command' }], async execute() { return { result: { kind: 'success', text: 'ok' } } } },
-    permissionPresets: { names: ['workspace-write', 'danger-full-access'], current: () => 'workspace-write', set() {} },
+    commands: {
+      list: () => [{ name: 'plan', description: 'Toggle plan' }, { name: 'resume', description: 'dsh resume command' }],
+      async execute(agent: Agent, line: string, attachments: unknown[], signal: AbortSignal) {
+        commandCalls.push([agent, line, attachments, signal])
+        return { result: { kind: 'success', text: 'ok' } }
+      },
+    },
+    permissionPresets: { names: ['workspace-write', 'danger-full-access', 'auto'], current: () => 'workspace-write', set() {} },
     sessionPersistence: { async list() { return [] } },
     sessionTitle: { rename() {} },
     attachments: {
@@ -75,7 +82,7 @@ function fixture(over?: { imageInput?: boolean }) {
     } : {},
   }
 
-  return { ctx, handlers, followups, steers, cancels, resumed, get questionProvider() { return questionProvider } }
+  return { ctx, handlers, followups, steers, cancels, resumed, commandCalls, get questionProvider() { return questionProvider } }
 }
 
 describe('M3 interaction controller', () => {
@@ -101,6 +108,15 @@ describe('M3 interaction controller', () => {
     expect(controller.getSnapshot().questions?.questions[0]).toMatchObject({ approve: 'Yes' })
     controller.answerQuestions([{ id: 'review', selected: ['Yes'] }])
     await expect(questionResult).resolves.toEqual({ answers: [{ id: 'review', selected: ['Yes'] }] })
+
+    const scopedQuestion = fx.handlers.get('user-questions/request')!.at(-1)!
+    const scopedResult = scopedQuestion({
+      agent: (controller as any).handle.agent,
+      questions: [{ id: 'v3', question: 'Continue?', options: [{ label: 'Yes' }] }],
+    }, async () => ({ answers: [] }))
+    expect(controller.getSnapshot().questions?.questions[0]).toMatchObject({ id: 'v3' })
+    controller.answerQuestions([{ id: 'v3', selected: ['Yes'] }])
+    await expect(scopedResult).resolves.toEqual({ answers: [{ id: 'v3', selected: ['Yes'] }] })
     await controller.dispose()
   })
 
@@ -115,6 +131,11 @@ describe('M3 interaction controller', () => {
     expect(controller.commandChoices().some(item => item.name === 'resume' && item.source === 'tui')).toBe(true)
     expect(controller.commandChoices().filter(item => item.name === 'resume').map(item => item.source)).toEqual(['dsh', 'tui'])
     expect(controller.commandChoices().some(item => item.name === 'image' && item.source === 'tui')).toBe(true)
+    expect(controller.permissionNames()).toEqual(['workspace-write', 'danger-full-access'])
+    await controller.executeCommand('/plan', 'dsh')
+    expect(fx.commandCalls[0]?.[1]).toBe('/plan')
+    expect(fx.commandCalls[0]?.[2]).toEqual([])
+    expect(fx.commandCalls[0]?.[3]).toBeInstanceOf(AbortSignal)
     await controller.switchSession('session-next')
     expect(fx.resumed).toEqual(['session-existing', 'session-next'])
     await controller.dispose()

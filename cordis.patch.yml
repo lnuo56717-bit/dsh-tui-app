@@ -5,8 +5,8 @@
   disabled: true
 
 - insert:
-    # Wrap the installed rc.5 DeepSeek adapter with vision catalog claims and
-    # image serialization. Must mount after dsh-base's llm-deepseek row.
+    # Backfill image serialization only when the active DeepSeek adapter does
+    # not already advertise native image input. Must mount after llm-deepseek.
     - id: llm-vision
       name: 'dsh-tui-app/llm-vision'
 

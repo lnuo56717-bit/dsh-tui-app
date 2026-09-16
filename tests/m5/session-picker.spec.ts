@@ -71,6 +71,32 @@ describe('persisted sessions read as conversations, not ids', () => {
     expect(fx.reads).toEqual(['session-a@0'])
   })
 
+  it('reads Session V3 snapshots through a read handle and always closes it', async () => {
+    const closed: string[] = []
+    const services: Record<string, any> = {
+      agentDefaultModel: { currentSelection: () => ({ provider: 'mock', model: 'whale' }), async saveSelection() {} },
+      sessionPersistence: {
+        async list() {
+          return [{ header: { version: 3, id: 'session-v3', createdAt: 9_000, isSeeded: false }, revision: 'r1', eventCount: log.length }]
+        },
+        async open(id: string, access: string) {
+          expect(access).toBe('read')
+          return {
+            header: { version: 3, id, createdAt: 9_000, isSeeded: false },
+            async read() { return { eventState: 'shared-frozen', events: log } },
+            async close() { closed.push(String(id)) },
+          }
+        },
+      },
+    }
+    const ctx = { on: () => () => {}, get: (name: string) => services[name] } as unknown as Context
+    const controller = new InteractionController(ctx, 'abyss')
+    const items = await controller.listSessions()
+    expect(items.map(item => item.id)).toEqual(['session-v3'])
+    expect(await controller.describeSession('session-v3')).toMatchObject({ title: '修复滚轮回填历史', prompts: 2 })
+    expect(closed).toEqual(['session-v3'])
+  })
+
   it('reports an unreadable log instead of failing the picker', async () => {
     const fx = fixture(new Error('unsupported session format version 9'))
     const controller = new InteractionController(fx.ctx, 'abyss')

@@ -15,10 +15,12 @@ export function apply(ctx) {
   const followupPath = process.env.DSH_TUI_AC5_FOLLOWUP
   if (!phase || !idPath || !resumePath || !followupPath) throw new Error('AC-5 environment is incomplete')
 
-  ctx.on('agent/session-start', ({ agent, source }) => {
+  const begin = ({ agent, source }) => {
     if (initialized) return
+    const expectedSource = phase === 'seed' ? 'startup' : 'resume'
+    if (source !== expectedSource) return
     initialized = true
-    if (phase === 'seed' && source === 'startup') {
+    if (phase === 'seed') {
       const session = agent.session
       session.append('turn/start', { turn: 1 })
       session.append('step/start', { turn: 1, step: 1 })
@@ -31,20 +33,23 @@ export function apply(ctx) {
         message: {
           id: 'ac5-assistant', role: 'assistant', source: { kind: 'model', provider: 'ac5', model: 'fixture' },
           content: [{ type: 'text', text: '已保存的鲸鱼历史：deep sea 🐋' }],
-        },
-      }, { surfaceOp: 'append', sourceEventSeqs: [] })
+        }, stream: [],
+      }, { surfaceOp: 'append' })
       session.append('step/end', { turn: 1, step: 1 })
       session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
-      writeFileSync(idPath, JSON.stringify({ sessionId: String(session.id), eventCount: session.events.length }) + '\n', 'utf8')
-    } else if (phase === 'resume' && source === 'resume') {
+      writeFileSync(idPath, JSON.stringify({ sessionId: String(session.id), eventCount: Number(session.seq) }) + '\n', 'utf8')
+    } else if (phase === 'resume') {
       resumedAgent = agent
-      const text = agent.session.events.map(event => event.type === 'user/message' ? textOf(event.data) : event.type === 'assistant/message' ? textOf(event.data.message) : '').join('\n')
+      const events = typeof agent.session.snapshotEvents === 'function' ? agent.session.snapshotEvents() : agent.session.events
+      const text = events.map(event => event.type === 'user/message' ? textOf(event.data) : event.type === 'assistant/message' ? textOf(event.data.message) : '').join('\n')
       writeFileSync(resumePath, JSON.stringify({
-        sessionId: String(agent.session.id), eventCount: agent.session.events.length,
+        sessionId: String(agent.session.id), eventCount: Number(agent.session.seq),
         historyObserved: text.includes('已保存的鲸鱼历史：deep sea 🐋'), source,
       }) + '\n', 'utf8')
     }
-  })
+  }
+  ctx.on('agent/created', begin)
+  ctx.on('agent/session-start', begin)
 
   ctx.on('agent/inbox/inserted', ({ agent, message }) => {
     if (phase !== 'resume' || agent !== resumedAgent) return

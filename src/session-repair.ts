@@ -1,5 +1,6 @@
-import { decodeStorageRecord, interruptedTurnClosers, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { interruptedTurnClosers, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type { EventLike } from './transcript-fold.js'
+import { decodeLegacyChunkRow } from './legacy-chunk-rows.js'
 
 /** Decode a backend raw artifact into logical events, expanding packed chunk rows. */
 export function parseRawSessionEvents(content: string): EventLike[] {
@@ -11,7 +12,7 @@ export function parseRawSessionEvents(content: string): EventLike[] {
     if (typeof record !== 'object' || record === null) continue
     const item = record as { type?: unknown }
     if (item.type === 'text-chunks' || item.type === 'reasoning-chunks' || item.type === 'tool-call-chunks') {
-      try { events.push(...decodeStorageRecord(record as never) as unknown as EventLike[]) } catch { continue }
+      try { events.push(...decodeLegacyChunkRow(record)) } catch { continue }
     } else if (typeof item.type === 'string' && typeof (record as { seq?: unknown }).seq === 'number') {
       events.push(record as EventLike)
     }

@@ -123,6 +123,8 @@ describe('welcome sessions and torn-log resume', () => {
     expect(fx.resumed).toEqual(['session-torn'])
     expect(fx.created).toHaveLength(1)
     expect(fx.created[0]?.seed?.map(item => item.seq)).toEqual([0, 1, 2])
+    expect(fx.created[0]?.meta).toMatchObject({ parentSession: 'session-torn', seedLength: 3 })
+    expect(fx.created[0]?.inheritedEventCount).toBeUndefined()
     expect(controller.getSnapshot().notice).toMatch(/repaired copy/i)
     expect(controller.getSnapshot().error).toBeUndefined()
     await controller.dispose()

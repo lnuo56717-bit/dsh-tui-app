@@ -59,12 +59,12 @@
     "test:ac:all": "npm run test:ac && npm run test:ac:m2 && npm run test:ac:m3 && npm run test:ac:m4 && npm run test:pty:m4"
   },
   "dependencies": {
-    "@deepseek-ai/dsh-cmdline": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-agent": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-agent-default-model": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-attachment": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-llm": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-session": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-cmdline": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-agent": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-agent-default-model": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-attachment": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-llm": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-session": "0.1.6-alpha.1",
     "commander": "15.0.0",
     "ink": "7.1.1",
     "marked": "18.0.7",
@@ -72,13 +72,13 @@
     "string-width": "8.2.2"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "4.0.1",
-    "@deepseek-ai/cordis-plugin-loader": "1.0.2"
+    "@deepseek-ai/cordis": "4.0.2",
+    "@deepseek-ai/cordis-plugin-loader": "1.0.3"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "4.0.1",
-    "@deepseek-ai/cordis-plugin-loader": "1.0.2",
-    "@deepseek-ai/dsh-session": "0.1.0-rc.6",
+    "@deepseek-ai/cordis": "4.0.2",
+    "@deepseek-ai/cordis-plugin-loader": "1.0.3",
+    "@deepseek-ai/dsh-session": "0.1.6-alpha.1",
     "@types/node": "24.10.1",
     "@types/react": "19.2.14",
     "fast-check": "4.9.0",

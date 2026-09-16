@@ -20,7 +20,7 @@ export function apply(ctx) {
   if (!auditPath) throw new Error('DSH_TUI_TIMER_AUDIT is not set')
   let started = false
 
-  ctx.on('agent/session-start', ({ agent, source }) => {
+  const begin = ({ agent, source }) => {
     if (started || source !== 'startup') return
     started = true
     const session = agent.session
@@ -38,8 +38,8 @@ export function apply(ctx) {
         message: {
           id: `timer-reply-${turn}`, role: 'assistant', source: { kind: 'model', provider: 'timer', model: 'fixture' },
           content: [{ type: 'text', text: reply }],
-        },
-      }, { surfaceOp: 'append', sourceEventSeqs: [] })
+        }, stream: [],
+      }, { surfaceOp: 'append' })
       session.append('step/end', { turn, step: 1 })
       const end = session.append('turn/end', { turn, reason: { kind: 'completed' } })
       agent.ctx.emit('agent/status', { agent, status: 'idle' })
@@ -56,5 +56,7 @@ export function apply(ctx) {
         writeFileSync(auditPath, `${JSON.stringify({ error: String(error?.stack ?? error) })}\n`, 'utf8')
       }
     })()
-  })
+  }
+  ctx.on('agent/created', begin)
+  ctx.on('agent/session-start', begin)
 }

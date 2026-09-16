@@ -6,6 +6,7 @@ Build from this repository, then let the existing `dsh` plugin manager compose t
 
 ```powershell
 Set-Location C:\absolute\path\to\dsh-tui-app
+dsh --version # expected host line: 0.1.6-alpha.1
 npm install
 npm run build
 dsh plugin --profile tui add "C:\absolute\path\to\dsh-tui-app"
@@ -54,7 +55,8 @@ $env:NO_COLOR = '1'; dsh --profile tui
 
 - “profile tui does not exist”: run the `dsh plugin --profile tui add <absolute-path>` command above.
 - “interactive TTY is required”: launch directly inside Windows Terminal, not through redirected stdin/stdout.
-- Missing status item: open `/session-info`. If the item is still absent, the corresponding rc.6 projection capability is not composed or has not reported a value; the TUI intentionally does not synthesize one.
+- Host version mismatch: this checkout targets `dsh-v0.1.6-alpha.1`. The installer does not replace the existing launcher; update Harness through its own supported workflow before relying on Session V3 behavior.
+- Missing status item: open `/session-info`. If the item is still absent, the corresponding host projection capability is not composed or has not reported a value; the TUI intentionally does not synthesize one.
 - Incorrect colors: force `--color 256`, `--color 16`, or `--color mono`. `NO_COLOR` wins over the flag.
 - Narrow layout: use at least 80×24 for the validated compact view or 120×40 for the full workbench and whale.
 - Dirty Harness checkout: this plugin never requires Harness source edits. Confirm that the plugin path points to this independent repository.
@@ -68,7 +70,7 @@ npm run build
 npm run test:ac:all
 ```
 
-AC-1 through AC-5 use isolated `DSH_HOME` directories under the repository and the already-installed launcher. Generated acceptance artifacts are gitignored.
+AC-1 through AC-5 use isolated `DSH_HOME` directories under the repository and the already-installed matching launcher. Generated acceptance artifacts are gitignored.
 
 ## Make bare `dsh` open this TUI
 
