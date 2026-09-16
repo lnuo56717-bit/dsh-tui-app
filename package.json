@@ -56,7 +56,9 @@
     "test:ask-user": "node scripts/ask-user-e2e.mjs",
     "test:timer": "node scripts/timer-e2e.mjs",
     "test:default-command": "node scripts/default-command-pty.mjs",
-    "test:ac:all": "npm run test:ac && npm run test:ac:m2 && npm run test:ac:m3 && npm run test:ac:m4 && npm run test:pty:m4"
+    "test:ac:all": "npm run test:ac && npm run test:ac:m2 && npm run test:ac:m3 && npm run test:ac:m4 && npm run test:pty:m4",
+    "test:ac:alpha": "powershell -ExecutionPolicy Bypass -File ./scripts/with-alpha-host.ps1 npm run test:ac:all",
+    "test:gate:alpha": "powershell -ExecutionPolicy Bypass -File ./scripts/with-alpha-host.ps1 npm run test:ac:all && powershell -ExecutionPolicy Bypass -File ./scripts/with-alpha-host.ps1 npm run test:timer && powershell -ExecutionPolicy Bypass -File ./scripts/with-alpha-host.ps1 npm run test:ask-user && node scripts/restore-flat-credentials.mjs"
   },
   "dependencies": {
     "@deepseek-ai/dsh-cmdline": "0.1.6-alpha.1",

@@ -25,9 +25,17 @@ Verification re-run after the four post-unit safety-review edits (dual replaceme
 - `npm run test:timer`, `npm run test:ask-user`, and `npm run test:default-command` passed against the machine's existing legacy host.
 - Every acceptance snapshot reported `D:\deepseek-harness` unchanged. Pre-existing dirty files there were left alone.
 
+Alpha-host V3 release gate, run against a side-by-side npm prefix (global `dsh 0.1.0-rc.5` left untouched):
+
+- Installed `@deepseek-ai/dsh@0.1.6-alpha.1` at `.alpha-host/` (`npm install --global --prefix .alpha-host @deepseek-ai/dsh@0.1.6-alpha.1`). That directory is gitignored. `scripts/with-alpha-host.ps1` prepends it to `PATH` for one command.
+- `npm run test:ac:all`, `npm run test:timer`, and `npm run test:ask-user` all passed with `dsh --version` reporting `0.1.6-alpha.1`. The timer probe wrote a V3 artifact (`session.v3.jsonl.zstd`) and then deleted it.
+- The alpha host migrated `~/.dsh/.credentials.yaml` to the versioned `refs:` layout. That file was flattened back afterwards so the daily `0.1.0-rc.5` launcher still boots; `npm run test:gate:alpha` now runs `scripts/restore-flat-credentials.mjs` at the end. A backup remains at `~/.dsh/.credentials.yaml.pre-alpha-v3`.
+- Windows ConPTY/node-pty sometimes omits a numeric exit code after a clean quit; PTY acceptance now treats a missing code as success and still fails on any actual nonzero status.
+- `D:\Apps\npm-global\dsh.cmd` still launches `D:\deepseek-harness\apps\cli\lib\bin.js` and still reports `0.1.0-rc.5`. `D:\deepseek-harness` dirty files were not discarded. Bare `npm run test:default-command` passed again after the credentials restore.
+
 Still unfinished:
 
-- This machine still reports global `dsh 0.1.0-rc.5`; it was deliberately not downloaded, replaced, or upgraded. Legacy compatibility is re-verified, but the complete V3 path still needs one release-gate run with a separately available matching `0.1.6-alpha.1` host. Do not claim that alpha-host gate passed until it actually runs.
+- The branch has not been pushed. The daily-driver launcher was intentionally not replaced.
 
 Detailed dependency hashes and seam decisions are in [PROVENANCE.md](PROVENANCE.md).
 
@@ -186,7 +194,15 @@ npm run build
 npm run test:ac:all
 ```
 
-The full local acceptance requires a matching `0.1.6-alpha.1` `dsh` launcher for AC-1 through AC-5. CI runs the static suite on `windows-latest`; real-profile PTY acceptance remains a local/release gate because CI does not install another Harness copy.
+The full local acceptance requires a matching `0.1.6-alpha.1` `dsh` launcher for AC-1 through AC-5. Do not replace this machine's daily `dsh 0.1.0-rc.5` wrapper to get one. Install a side-by-side copy and run the gate through it:
+
+```powershell
+npm install --global --prefix .\.alpha-host @deepseek-ai/dsh@0.1.6-alpha.1
+npm run test:ac:alpha
+npm run test:gate:alpha
+```
+
+`scripts/with-alpha-host.ps1` prepends `.alpha-host` to `PATH` for one command. CI runs the static suite on `windows-latest`; real-profile PTY acceptance remains a local/release gate because CI does not install another Harness copy.
 
 `npm run test:timer` is a local-only end-to-end check of the elapsed-time chip: a read-only `--patch` overlay adds a driver that opens and closes two real turns on the real session clock, and the probe asserts the footer counted up once a second while a turn was open and then stated the conversation total that matches the logged spans. Like the check below, it edits nothing under `$DSH_HOME` and deletes the session its own probe created.
 

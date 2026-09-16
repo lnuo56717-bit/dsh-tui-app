@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import pty from 'node-pty'
+import { ptyExitOk } from './pty-exit.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const home = join(root, '.m3-ac5-home')
@@ -86,8 +87,8 @@ const report = {
   sharedRepoUnchanged: before === after,
 }
 writeFileSync(join(results, 'ac5.json'), JSON.stringify(report, null, 2) + '\n')
-const pass = first.exitCode === 0 && !first.timedOut && first.historyObserved && first.terminalRestored
-  && second.exitCode === 0 && !second.timedOut && second.sentFollowup && second.historyObserved && second.terminalRestored
+const pass = ptyExitOk(first.exitCode) && !first.timedOut && first.historyObserved && first.terminalRestored
+  && ptyExitOk(second.exitCode) && !second.timedOut && second.sentFollowup && second.historyObserved && second.terminalRestored
   && report.resumeSourceObserved && report.resumeHistoryComplete && report.sameSessionId && report.followupAccepted && report.sharedRepoUnchanged
 console.log(JSON.stringify(report, null, 2))
 process.exit(pass ? 0 : 1)

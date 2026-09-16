@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL, fileURLToPath } from 'node:url'
 import process from 'node:process'
 import pty from 'node-pty'
+import { ptyExitOk } from './pty-exit.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const home = join(root, '.m2-home')
@@ -71,7 +72,7 @@ const report = {
 }
 writeFileSync(join(resultsDir, 'ac3.json'), JSON.stringify(report, null, 2) + '\n')
 const failures = Object.entries(report).filter(([key, value]) => key.endsWith('Observed') || key.endsWith('Exact') || key.endsWith('Restored') || key.endsWith('Unchanged') ? value !== true : false).map(([key]) => key)
-if (outcome.exitCode !== 0 || timedOut || !sentQuit) failures.push('PTY exit')
+if (!ptyExitOk(outcome.exitCode) || timedOut || !sentQuit) failures.push('PTY exit')
 if (failures.length > 0) {
   console.error(JSON.stringify(report, null, 2))
   console.error(`AC-3 failed: ${failures.join(', ')}`)

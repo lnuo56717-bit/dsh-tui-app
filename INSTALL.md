@@ -6,7 +6,7 @@ Build from this repository, then let the existing `dsh` plugin manager compose t
 
 ```powershell
 Set-Location C:\absolute\path\to\dsh-tui-app
-dsh --version # expected host line: 0.1.6-alpha.1
+dsh --version # Session V3 needs 0.1.6-alpha.1; this machine's daily launcher may still be older
 npm install
 npm run build
 dsh plugin --profile tui add "C:\absolute\path\to\dsh-tui-app"
@@ -70,7 +70,12 @@ npm run build
 npm run test:ac:all
 ```
 
-AC-1 through AC-5 use isolated `DSH_HOME` directories under the repository and the already-installed matching launcher. Generated acceptance artifacts are gitignored.
+AC-1 through AC-5 use isolated `DSH_HOME` directories under the repository. Generated acceptance artifacts are gitignored. To exercise Session V3 without replacing the daily launcher, install a prefix-local copy and prepend it for the gate:
+
+```powershell
+npm install --global --prefix .\.alpha-host @deepseek-ai/dsh@0.1.6-alpha.1
+npm run test:gate:alpha
+```
 
 ## Make bare `dsh` open this TUI
 

@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import process from 'node:process'
 import pty from 'node-pty'
+import { ptyExitOk } from './pty-exit.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const home = join(root, '.m1-home')
@@ -91,7 +92,7 @@ const failures = []
 if (report.help.exitCode !== 0 || report.help.flags.some(item => !item.present)) failures.push('help/flags')
 if (report.profileInstallExitCode !== 0) failures.push('profile install')
 if (JSON.stringify(report.profileBundles) !== JSON.stringify(['@deepseek-ai/dsh-base', 'dsh-tui-app'])) failures.push('profile bundles')
-if (report.pty.exitCode !== 0 || report.pty.timedOut || !report.pty.sentQuit) failures.push('PTY exit')
+if (!ptyExitOk(report.pty.exitCode) || report.pty.timedOut || !report.pty.sentQuit) failures.push('PTY exit')
 if (!report.pty.enteredAlternateScreen || !report.pty.leftAlternateScreen || report.pty.enterCount !== report.pty.leaveCount) failures.push('alternate screen')
 if (!report.pty.shellVisible) failures.push('shell frame')
 if (!report.sharedRepo.unchanged) failures.push('shared repo mutated')

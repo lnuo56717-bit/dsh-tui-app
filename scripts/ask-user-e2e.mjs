@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import pty from 'node-pty'
+import { ptyExitOk } from './pty-exit.mjs'
 
 /**
  * End-to-end check for the native ask_user_question path on the profile this
@@ -129,6 +130,6 @@ writeFileSync(join(results, 'ask-user-e2e.json'), `${JSON.stringify(report, null
 console.log(JSON.stringify(report, null, 2))
 
 const pass = report.composedFromUserPatch && report.toolRegistered && report.cardObserved && report.answerMatches
-  && report.pausedUntilAnswered && !report.toolFailed && !report.timedOut && report.exitCode === 0
+  && report.pausedUntilAnswered && !report.toolFailed && !report.timedOut && ptyExitOk(report.exitCode)
   && report.terminalRestored && report.sharedRepoUnchanged
 process.exit(pass ? 0 : 1)

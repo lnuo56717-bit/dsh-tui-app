@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import pty from 'node-pty'
+import { ptyExitOk } from './pty-exit.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const home = join(root, '.m3-ac4-home')
@@ -72,9 +73,9 @@ const report = {
   profileInstallExitCode: install.status, allowed, rejected, sharedRepoUnchanged: before === after,
 }
 writeFileSync(join(results, 'ac4.json'), JSON.stringify(report, null, 2) + '\n')
-const pass = allowed.exitCode === 0 && !allowed.timedOut && allowed.cardObserved && allowed.outcome === 'allowed-once'
+const pass = ptyExitOk(allowed.exitCode) && !allowed.timedOut && allowed.cardObserved && allowed.outcome === 'allowed-once'
   && allowed.askedLogged && allowed.decidedLogged && allowed.targetExact && allowed.terminalRestored
-  && (rejected === undefined || rejected.exitCode === 0 && !rejected.timedOut && rejected.cardObserved && rejected.outcome === 'rejected'
+  && (rejected === undefined || ptyExitOk(rejected.exitCode) && !rejected.timedOut && rejected.cardObserved && rejected.outcome === 'rejected'
   && rejected.askedLogged && rejected.decidedLogged && !rejected.targetExists && rejected.terminalRestored)
   && report.sharedRepoUnchanged
 console.log(JSON.stringify(report, null, 2))

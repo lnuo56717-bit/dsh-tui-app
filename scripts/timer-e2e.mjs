@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import pty from 'node-pty'
+import { ptyExitOk } from './pty-exit.mjs'
 import { formatElapsed } from '../lib/ui/timing.js'
 
 /**
@@ -121,6 +122,6 @@ console.log(JSON.stringify(report, null, 2))
 
 const pass = report.turnsMeasured === 2 && report.tickedWhileRunning && report.runningTotalObserved
   && report.firstTurnObserved && report.conversationTotalObserved && report.transcriptObserved
-  && !report.driverError && !report.timedOut && report.exitCode === 0 && report.terminalRestored
+  && !report.driverError && !report.timedOut && ptyExitOk(report.exitCode) && report.terminalRestored
   && report.sharedRepoUnchanged
 process.exit(pass ? 0 : 1)

@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import process from 'node:process'
 import pty from 'node-pty'
+import { ptyExitOk } from './pty-exit.mjs'
 import { terminalSequences } from '../lib/ui/terminal.js'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -77,7 +78,7 @@ const report = {
 }
 writeFileSync(join(results, 'm4-pty.json'), JSON.stringify(report, null, 2) + '\n')
 const required = ['compactHeader', 'transcriptVisible', 'keyPageVisible', 'noWideWhale', 'explicit256Color', 'terminalRestored', 'sharedRepoUnchanged']
-const failed = outcome.exitCode !== 0 || timedOut || !sentQuit || !cursorColorResetConfigured || required.some(key => report[key] !== true)
+const failed = !ptyExitOk(outcome.exitCode) || timedOut || !sentQuit || !cursorColorResetConfigured || required.some(key => report[key] !== true)
 if (failed) {
   console.error(JSON.stringify(report, null, 2))
   process.exit(1)

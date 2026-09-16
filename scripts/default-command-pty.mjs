@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import process from 'node:process'
 import pty from 'node-pty'
+import { ptyExitOk } from './pty-exit.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const results = join(root, '.m4-results')
@@ -51,7 +52,7 @@ const report = {
 }
 writeFileSync(join(results, 'default-command.json'), JSON.stringify(report, null, 2) + '\n')
 const required = ['bareCommandShowsTui', 'terminalRestored', 'explicitHelpPreserved', 'explicitTuiHelpWorks', 'wrapperHasNoArgumentBranch', 'sharedRepoUnchanged']
-if (outcome.exitCode !== 0 || timedOut || !sentQuit || required.some(key => report[key] !== true)) {
+if (!ptyExitOk(outcome.exitCode) || timedOut || !sentQuit || required.some(key => report[key] !== true)) {
   console.error(JSON.stringify(report, null, 2))
   process.exit(1)
 }

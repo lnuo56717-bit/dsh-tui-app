@@ -22,6 +22,7 @@ credentials.yaml
 .m4-results/
 .m4-home/
 .m5-results/
+.alpha-host/
 assets/generated/
 *.tgz
 *.log
