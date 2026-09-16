@@ -172,7 +172,8 @@ export const KNOWN_EVENT_TYPES = [
   'approval/decided', 'approval/policy', 'permission/preset', 'sandbox/mode', 'plan/mode', 'command/run',
   'command/done', 'compaction/start', 'compaction/summary', 'compaction/end', 'compaction/prune', 'feedback/record',
   'goal/change', 'hook/invoked', 'hook/result', 'llm/retry', 'llm/retry-started', 'schedule/change', 'session/title',
-  'session/title-llm-request', 'subagent/descriptor', 'image/offload', 'tool-workflow/run-start', 'tool-workflow/agent-start',
+  'session/title-llm-request', 'subagent/descriptor', 'image/offload', 'session-log-deepseek/delivery-accepted',
+  'tool-workflow/run-start', 'tool-workflow/agent-start',
   'tool-workflow/agent-end', 'tool-workflow/run-end', 'web/deepseek-search-llm-request',
 ] as const
 
@@ -719,7 +720,8 @@ export function foldTranscript(state: TranscriptState, event: EventLike): Transc
     case 'goal/change':
     case 'session/title':
     case 'subagent/descriptor':
-    case 'image/offload': return updateMetadata(state, event)
+    case 'image/offload':
+    case 'session-log-deepseek/delivery-accepted': return updateMetadata(state, event)
     default: return { ...state, lastSeq: event.seq }
   }
 }

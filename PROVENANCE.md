@@ -33,6 +33,7 @@ The committed `package-lock.json` is the complete transitive lock. All resolved 
 | Live assistant output | process-local `agent/assistant-stream` start/chunk/end frames | displayed as an ephemeral overlay; never assigned a durable Session seq |
 | Durable assistant output | one `assistant/message` or `assistant/attempt` with compact `stream` records | final message replaces the overlay; stream is validated/expanded for resumed TPS facts |
 | Image request offload | durable `image/offload` preserves historical image identity while changing future request projection | treated as known non-visual metadata; the original transcript attachment remains visible |
+| Session-log delivery | durable `session-log-deepseek/delivery-accepted` watermarks that a log suffix was accepted by the DeepSeek request extension | treated as known non-visual metadata; not a transcript card |
 | Session format | `SESSION_FORMAT_VERSION = 3`; `.events` removed | one centralized `snapshotEvents()` compatibility boundary; internal folds use an unbranded serializable view |
 | Surface replacement | `{ op: 'replace', startSeq, endSeq }` | normalized to the TUI fold's `{ start, end }` form |
 | Seed lineage | `meta.isSeeded` plus `inheritedEventCount` | v3 repaired copies use both fields; the old raw-rescue compatibility path retains its legacy `seedLength` input |

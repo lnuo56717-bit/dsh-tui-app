@@ -91,16 +91,26 @@ describe('M2 deterministic transcript fold', () => {
     expect(state.nodes).toMatchObject([{ kind: 'message', blocks: [{ type: 'text', text: 'summary' }] }])
   })
 
-  it('recognizes all 47 locked event names and renders an unknown event exactly once', () => {
-    expect(KNOWN_EVENT_TYPES).toHaveLength(47)
+  it('recognizes all 48 locked event names and renders an unknown event exactly once', () => {
+    expect(KNOWN_EVENT_TYPES).toHaveLength(48)
     let state = EMPTY_TRANSCRIPT
     KNOWN_EVENT_TYPES.forEach((type, seq) => { state = foldTranscript(state, event(seq, type, {})) })
     expect(state.nodes.filter(node => node.kind === 'raw')).toEqual([])
-    state = foldTranscript(state, event(47, 'future/sea-change', { payload: 'kept' }))
+    state = foldTranscript(state, event(48, 'future/sea-change', { payload: 'kept' }))
     expect(state.nodes.filter(node => node.kind === 'raw')).toEqual([
-      { kind: 'raw', id: 'raw:47', seq: 47, eventType: 'future/sea-change', data: { payload: 'kept' }, required: true },
+      { kind: 'raw', id: 'raw:48', seq: 48, eventType: 'future/sea-change', data: { payload: 'kept' }, required: true },
     ])
     expect(foldTranscript(state, event(44, 'future/sea-change', { payload: 'duplicate' }))).toBe(state)
+  })
+
+  it('folds session-log-deepseek delivery watermarks as metadata, not raw cards', () => {
+    const state = foldTranscript(EMPTY_TRANSCRIPT, event(0, 'session-log-deepseek/delivery-accepted', {
+      sessionId: 'session-x', sessionFormatVersion: 3, throughSeq: 3,
+    }))
+    expect(state.nodes.filter(node => node.kind === 'raw')).toEqual([])
+    expect(state.metadata['session-log-deepseek/delivery-accepted']).toEqual({
+      sessionId: 'session-x', sessionFormatVersion: 3, throughSeq: 3,
+    })
   })
 
   it('marks a seq gap for controller resnapshot instead of guessing missing events', () => {
