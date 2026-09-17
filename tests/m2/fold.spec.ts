@@ -91,14 +91,14 @@ describe('M2 deterministic transcript fold', () => {
     expect(state.nodes).toMatchObject([{ kind: 'message', blocks: [{ type: 'text', text: 'summary' }] }])
   })
 
-  it('recognizes all 48 locked event names and renders an unknown event exactly once', () => {
-    expect(KNOWN_EVENT_TYPES).toHaveLength(48)
+  it('recognizes all 56 locked event names and renders an unknown event exactly once', () => {
+    expect(KNOWN_EVENT_TYPES).toHaveLength(56)
     let state = EMPTY_TRANSCRIPT
     KNOWN_EVENT_TYPES.forEach((type, seq) => { state = foldTranscript(state, event(seq, type, {})) })
     expect(state.nodes.filter(node => node.kind === 'raw')).toEqual([])
-    state = foldTranscript(state, event(48, 'future/sea-change', { payload: 'kept' }))
+    state = foldTranscript(state, event(56, 'future/sea-change', { payload: 'kept' }))
     expect(state.nodes.filter(node => node.kind === 'raw')).toEqual([
-      { kind: 'raw', id: 'raw:48', seq: 48, eventType: 'future/sea-change', data: { payload: 'kept' }, required: true },
+      { kind: 'raw', id: 'raw:56', seq: 56, eventType: 'future/sea-change', data: { payload: 'kept' }, required: true },
     ])
     expect(foldTranscript(state, event(44, 'future/sea-change', { payload: 'duplicate' }))).toBe(state)
   })
@@ -111,6 +111,46 @@ describe('M2 deterministic transcript fold', () => {
     expect(state.metadata['session-log-deepseek/delivery-accepted']).toEqual({
       sessionId: 'session-x', sessionFormatVersion: 3, throughSeq: 3,
     })
+  })
+
+  it('nests Session V3 PTC dispatches under their exact parent tool', () => {
+    const state = foldEvents([
+      event(0, 'tool/call', { callId: 'root', name: 'run_code', arguments: '{"code":"..."}' }),
+      event(1, 'tool/ptc-dispatch-start', {
+        rootCallId: 'root', parentCallId: 'root', subCallId: 'child-a', name: 'read', arguments: { path: 'a.txt' },
+      }),
+      event(2, 'tool/ptc-dispatch-start', {
+        rootCallId: 'root', parentCallId: 'child-a', subCallId: 'child-b', name: 'parse', arguments: { mode: 'strict' },
+      }),
+      event(3, 'tool/ptc-dispatch', {
+        rootCallId: 'root', parentCallId: 'child-a', subCallId: 'child-b', name: 'parse', arguments: { mode: 'strict' },
+        isError: true, content: [{ type: 'text', text: 'bad input' }], error: { name: 'ParseError', code: 'BAD_INPUT' },
+      }),
+      event(4, 'tool/ptc-dispatch', {
+        rootCallId: 'root', parentCallId: 'root', subCallId: 'child-a', name: 'read', arguments: { path: 'a.txt' },
+        isError: false, content: [{ type: 'text', text: 'done' }],
+      }),
+    ])
+    const root = state.nodes[0] as ToolNode
+    expect(root.children[0]).toMatchObject({ callId: 'child-a', name: 'read', status: 'success' })
+    expect(root.children[0]?.children[0]).toMatchObject({
+      callId: 'child-b', name: 'parse', status: 'error', result: [{ type: 'text', text: 'bad input' }],
+      error: { name: 'ParseError', code: 'BAD_INPUT' },
+    })
+  })
+
+  it('folds confirmed 0.1.6 log-only facts without transcript cards', () => {
+    const facts = [
+      ['model/selection', { provider: 'deepseek-official', model: 'deepseek-chat' }],
+      ['subagent/catalog', { version: 0, childId: 'session-child', childCreatedAt: 1, mode: 'one-shot' }],
+      ['subagent/model-selection-policy', { allowedModels: [] }],
+      ['deliverables/presented', { turn: 1, callId: 'present-1', files: [{ path: 'report.md' }] }],
+      ['feedback/message-put', { sessionId: 'session-x', item: { messageId: 'm1', rating: 'positive' } }],
+      ['feedback/message-delete', { sessionId: 'session-x', messageId: 'm1' }],
+    ] as const
+    const state = foldEvents(facts.map(([type, data], seq) => event(seq, type, data)))
+    expect(state.nodes).toEqual([])
+    for (const [type, data] of facts) expect(state.metadata[type]).toEqual(data)
   })
 
   it('marks a seq gap for controller resnapshot instead of guessing missing events', () => {

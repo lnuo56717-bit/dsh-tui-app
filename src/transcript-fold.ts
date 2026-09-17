@@ -167,12 +167,15 @@ export const EMPTY_TRANSCRIPT: TranscriptState = Object.freeze({
 export const KNOWN_EVENT_TYPES = [
   'turn/start', 'turn/end', 'step/start', 'step/end', 'user/message', 'system/message', 'assistant/chunk', 'assistant/message',
   'assistant/attempt',
-  'tool/call', 'tool/result', 'tool/code-dispatch-start', 'tool/code-dispatch', 'todo/write', 'request/header',
+  'tool/call', 'tool/result', 'tool/code-dispatch-start', 'tool/code-dispatch', 'tool/ptc-dispatch-start', 'tool/ptc-dispatch',
+  'todo/write', 'request/header',
   'request/context', 'session/end-seed', 'agent-preset/selected', 'agent/inbox/spliced', 'approval/asked',
   'approval/decided', 'approval/policy', 'permission/preset', 'sandbox/mode', 'plan/mode', 'command/run',
   'command/done', 'compaction/start', 'compaction/summary', 'compaction/end', 'compaction/prune', 'feedback/record',
   'goal/change', 'hook/invoked', 'hook/result', 'llm/retry', 'llm/retry-started', 'schedule/change', 'session/title',
-  'session/title-llm-request', 'subagent/descriptor', 'image/offload', 'session-log-deepseek/delivery-accepted',
+  'session/title-llm-request', 'model/selection', 'subagent/descriptor', 'subagent/catalog',
+  'subagent/model-selection-policy', 'deliverables/presented', 'feedback/message-put', 'feedback/message-delete',
+  'image/offload', 'session-log-deepseek/delivery-accepted',
   'tool-workflow/run-start', 'tool-workflow/agent-start',
   'tool-workflow/agent-end', 'tool-workflow/run-end', 'web/deepseek-search-llm-request',
 ] as const
@@ -563,17 +566,20 @@ function foldCodeDispatch(state: TranscriptState, event: EventLike): TranscriptS
   const subCallId = string(data.subCallId, `dispatch-${event.seq}`)
   const childId = `tool:${subCallId}`
   const existing = state.toolIndex[subCallId]
-  if (event.type === 'tool/code-dispatch' && existing !== undefined) {
+  const settled = event.type === 'tool/code-dispatch' || event.type === 'tool/ptc-dispatch'
+  if (settled && existing !== undefined) {
     const nodes = updateTool(state.nodes, existing, tool => ({
       ...tool, status: data.isError === true ? 'error' : 'success', result: normalizeBlocks(data.content),
+      ...(data.error === undefined ? {} : { error: data.error }),
     }))
     return { ...state, lastSeq: event.seq, nodes }
   }
   const child: ToolNode = {
     kind: 'tool', id: childId, seq: event.seq, callId: subCallId, name: string(data.name, 'dispatch'),
     arguments: typeof data.arguments === 'string' ? data.arguments : JSON.stringify(data.arguments ?? {}),
-    status: event.type === 'tool/code-dispatch' ? (data.isError === true ? 'error' : 'success') : 'running',
-    result: event.type === 'tool/code-dispatch' ? normalizeBlocks(data.content) : [], children: [],
+    status: settled ? (data.isError === true ? 'error' : 'success') : 'running',
+    result: settled ? normalizeBlocks(data.content) : [], children: [],
+    ...(data.error === undefined ? {} : { error: data.error }),
   }
   const parentCallId = string(data.parentCallId)
   const parentId = state.toolIndex[parentCallId]
@@ -694,7 +700,9 @@ export function foldTranscript(state: TranscriptState, event: EventLike): Transc
     case 'tool/call': return foldToolCall(state, event)
     case 'tool/result': return foldToolResult(state, event)
     case 'tool/code-dispatch-start':
-    case 'tool/code-dispatch': return foldCodeDispatch(state, event)
+    case 'tool/code-dispatch':
+    case 'tool/ptc-dispatch-start':
+    case 'tool/ptc-dispatch': return foldCodeDispatch(state, event)
     case 'tool-workflow/run-start':
     case 'tool-workflow/agent-start':
     case 'tool-workflow/agent-end':
@@ -719,7 +727,13 @@ export function foldTranscript(state: TranscriptState, event: EventLike): Transc
     case 'plan/mode':
     case 'goal/change':
     case 'session/title':
+    case 'model/selection':
     case 'subagent/descriptor':
+    case 'subagent/catalog':
+    case 'subagent/model-selection-policy':
+    case 'deliverables/presented':
+    case 'feedback/message-put':
+    case 'feedback/message-delete':
     case 'image/offload':
     case 'session-log-deepseek/delivery-accepted': return updateMetadata(state, event)
     default: return { ...state, lastSeq: event.seq }

@@ -2,9 +2,9 @@
 
 A full-screen terminal interface (TUI) for DeepSeek Harness (`dsh`), built as an independent, out-of-tree plugin. It runs in the same process as the `dsh` host, combines the durable Session V3 log with the process-local assistant stream, and uses host projections only for auxiliary status facts. The Chafa-generated DeepSeek whale is its one visual signature.
 
-## Upgrade handoff — 2026-09-16
+## Upgrade handoff — 2026-09-17
 
-Work continues on branch `codex/harness-0.1.6-upgrade`. The upgrade target is the immutable official prerelease `dsh-v0.1.6-alpha.1` (`0a15e36e7f82b6ed45af6fa9759f29b40dcd965d`), not moving `master`. The branch has not been pushed.
+Work continues on branch `codex/harness-0.1.6-upgrade`. The upgrade target is the immutable official prerelease `dsh-v0.1.6-alpha.1` (`0a15e36e7f82b6ed45af6fa9759f29b40dcd965d`), not moving `master`. Commits through `4855c06` are pushed to `origin/codex/harness-0.1.6-upgrade`; the continuation described below remains a verified working-tree change until it is reviewed and committed.
 
 Completed implementation:
 
@@ -14,28 +14,32 @@ Completed implementation:
 - Adapted agent creation, async `agent/created`, SessionHandle persistence reads/closure, V3 seed lineage, Session-backed permission lookup, four-argument command execution, and agent-scoped structured questions. Old-host bridges remain narrowly scoped for staged rollout.
 - Made the old DeepSeek image serializer a compatibility fallback only. A current adapter advertising native image input owns its own Messages/Files serialization.
 - Recognized `image/offload` as non-visual durable metadata so image request offloading does not create a raw transcript card.
+- Folded Session V3 `tool/ptc-dispatch-start` / `tool/ptc-dispatch` into the existing recursive tool tree while retaining legacy V2 `tool/code-dispatch*` compatibility and structured settlement errors.
+- Classified the confirmed log-only `model/selection`, subagent catalog/policy, deliverables, and message-feedback mutation events as metadata so they remain inspectable without producing raw transcript cards.
 - Kept experimental high-authority features out of the TUI. In particular, the new `auto` permission preset is filtered from selectable/cyclable presets because this TUI has no Auto-review safety surface; browser/computer control, SSH workspaces, teams, and Auto review are not auto-enabled.
 - Retained a small read-only decoder solely for rescuing torn V2 JSONL logs; healthy historical migration remains owned by Harness.
 - Updated acceptance fixtures and documentation for the new lifecycle and compact Assistant stream contracts.
 
-Verification re-run after the four post-unit safety-review edits (dual replacement-range normalization, explicit setup-agent use, `image/offload` folding, and filtering the `auto` permission preset):
+Verification re-run after the safe PTC/log-only-event continuation:
 
-- `npm run check`, `npm test` (40 files / 153 tests), `npm run build`, and `npm audit --omit=dev --audit-level=high` all passed; audit reported 0 vulnerabilities.
+- `npm run check`, `npm test` (40 files / 156 tests), `npm run build`, `git diff --check`, and `npm audit --omit=dev --audit-level=high` all passed; audit reported 0 vulnerabilities.
 - `npm run test:ac:all` passed, including live streaming, tools/diffs, approval allow/reject, resume/history integrity, narrow layout, dependency/provenance locks, and the Windows ConPTY 256-color case (ambient `NO_COLOR=1` cleared so it could not inherit the monochrome path).
-- `npm run test:timer`, `npm run test:ask-user`, and `npm run test:default-command` passed against the machine's existing legacy host.
+- `npm run test:gate:alpha` passed end to end, including the full acceptance suite, live elapsed timer, structured question card, credential restoration, and colored whale under the exact alpha host.
 - Every acceptance snapshot reported `D:\deepseek-harness` unchanged. Pre-existing dirty files there were left alone.
 
-Alpha-host V3 release gate, run against a side-by-side npm prefix (global `dsh 0.1.0-rc.5` left untouched):
+Alpha-host V3 release gate, run against the exact side-by-side npm prefix:
 
 - Installed `@deepseek-ai/dsh@0.1.6-alpha.1` at `.alpha-host/` (`npm install --global --prefix .alpha-host @deepseek-ai/dsh@0.1.6-alpha.1`). That directory is gitignored. `scripts/with-alpha-host.ps1` prepends it to `PATH` for one command.
 - `npm run test:ac:all`, `npm run test:timer`, and `npm run test:ask-user` all passed with `dsh --version` reporting `0.1.6-alpha.1`. The timer probe wrote a V3 artifact (`session.v3.jsonl.zstd`) and then deleted it.
-- The alpha host migrated `~/.dsh/.credentials.yaml` to the versioned `refs:` layout. That file was flattened back afterwards so the daily `0.1.0-rc.5` launcher still boots; `npm run test:gate:alpha` now runs `scripts/restore-flat-credentials.mjs` at the end. A backup remains at `~/.dsh/.credentials.yaml.pre-alpha-v3`.
+- The alpha host migrated `~/.dsh/.credentials.yaml` to the versioned `refs:` layout. The gate restored the pre-gate flat credentials afterwards through `scripts/restore-flat-credentials.mjs`; a backup remains at `~/.dsh/.credentials.yaml.pre-alpha-v3`.
 - Windows ConPTY/node-pty sometimes omits a numeric exit code after a clean quit; PTY acceptance now treats a missing code as success and still fails on any actual nonzero status.
-- `D:\Apps\npm-global\dsh.cmd` still launches `D:\deepseek-harness\apps\cli\lib\bin.js` and still reports `0.1.0-rc.5`. `D:\deepseek-harness` dirty files were not discarded. Bare `npm run test:default-command` passed again after the credentials restore.
+- The current bare launcher at `D:\Apps\npm-global\dsh.cmd` reports `0.1.6-alpha.1`. `D:\deepseek-harness` dirty files were not discarded or modified by the gate.
 
 Still unfinished:
 
-- The branch has not been pushed. The daily-driver launcher was intentionally not replaced.
+- MCP resource/URI-template browsing and the `@` attachment picker still need a coherent terminal interaction and attachment-lifecycle design.
+- Auto review, browser/computer control, SSH workspaces, and Agent Teams remain deliberately disabled until each has an explicit, fail-closed safety surface.
+- The current PTC/log-only-event continuation is tested but not yet committed or pushed.
 
 Detailed dependency hashes and seam decisions are in [PROVENANCE.md](PROVENANCE.md).
 
@@ -45,7 +49,7 @@ Detailed dependency hashes and seam decisions are in [PROVENANCE.md](PROVENANCE.
 
 ## Features
 
-- **Streaming transcript** — terminal-native Markdown, tool trees, diffs, workflow/job summaries, and raw-event fallback, with grapheme-safe CJK layout.
+- **Streaming transcript** — terminal-native Markdown, nested V2/V3 PTC tool trees, diffs, workflow/job summaries, and raw-event fallback, with grapheme-safe CJK layout.
 - **Folded tool output** — tool results render preformatted (never re-flowed as prose) and collapse to a six-line preview that carries the real line count. Arrow keys select any block; `→`/`←` expand and collapse; `Ctrl+E` toggles everything.
 - **Row-precise scrollback** — the viewport is a window over rendered terminal lines, not over nodes: one wheel notch always moves three lines, a proportional scrollbar tracks position, streaming appends stay anchored on what you are reading, and a released wheel returns to the pinned live tail.
 - **In-place IME composition** — the terminal cursor is parked on the composer caret every frame, so pinyin/pre-edit text composes inside the prompt instead of at the bottom of the screen.
