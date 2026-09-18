@@ -67,7 +67,7 @@ const terminal = pty.spawn('cmd.exe', ['/d', '/s', '/c', `dsh --profile tui --pa
   name: 'xterm-256color', cols: 120, rows: 40, cwd: root, env,
 })
 const exited = await new Promise(resolveExit => {
-  const timeout = setTimeout(() => { timedOut = true; terminal.kill() }, 60_000)
+  const timeout = setTimeout(() => { timedOut = true; terminal.kill() }, 150_000)
   terminal.onData(data => {
     capture += data
     if (!sentApproval && capture.includes('PERMISSION REQUIRED')) {

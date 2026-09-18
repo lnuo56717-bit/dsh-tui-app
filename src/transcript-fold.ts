@@ -175,6 +175,7 @@ export const KNOWN_EVENT_TYPES = [
   'goal/change', 'hook/invoked', 'hook/result', 'llm/retry', 'llm/retry-started', 'schedule/change', 'session/title',
   'session/title-llm-request', 'model/selection', 'subagent/descriptor', 'subagent/catalog',
   'subagent/model-selection-policy', 'deliverables/presented', 'feedback/message-put', 'feedback/message-delete',
+  'team/member', 'team/task', 'team/message/queued', 'team/message/delivered',
   'image/offload', 'session-log-deepseek/delivery-accepted',
   'tool-workflow/run-start', 'tool-workflow/agent-start',
   'tool-workflow/agent-end', 'tool-workflow/run-end', 'web/deepseek-search-llm-request',
@@ -512,8 +513,10 @@ export function foldLiveAssistantChunk(
 function foldUserMessage(state: TranscriptState, event: EventLike): TranscriptState {
   const message = record(event.data)
   const source = record(message.source)
+  const teamSender = source.kind === 'team-message' ? string(source.senderName) : ''
   const node: MessageNode = {
-    kind: 'message', id: `message:${event.seq}`, seq: event.seq, role: 'user', source: string(source.kind, 'user'),
+    kind: 'message', id: `message:${event.seq}`, seq: event.seq, role: 'user',
+    source: teamSender === '' ? string(source.kind, 'user') : `teammate ${teamSender}`,
     blocks: normalizeBlocks(message.content), streaming: false,
   }
   let next: TranscriptState = { ...state, lastSeq: event.seq, nodes: [...state.nodes, node] }
@@ -734,6 +737,10 @@ export function foldTranscript(state: TranscriptState, event: EventLike): Transc
     case 'deliverables/presented':
     case 'feedback/message-put':
     case 'feedback/message-delete':
+    case 'team/member':
+    case 'team/task':
+    case 'team/message/queued':
+    case 'team/message/delivered':
     case 'image/offload':
     case 'session-log-deepseek/delivery-accepted': return updateMetadata(state, event)
     default: return { ...state, lastSeq: event.seq }

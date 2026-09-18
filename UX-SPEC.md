@@ -1,6 +1,6 @@
 # dsh-tui UX Specification
 
-Status: original M0 interaction baseline, retained after the `dsh-v0.1.6-alpha.1` compatibility upgrade. The interaction reference is grok-build `eb267feff13129e568df38fb6fdf0ceb65f735d6`; current host seams and deviations are recorded in `PROVENANCE.md`.
+Status: original M0 interaction baseline plus the `dsh-v0.1.6-alpha.2` Agent Teams surface. The interaction reference is grok-build `eb267feff13129e568df38fb6fdf0ceb65f735d6`; current host seams and deviations are recorded in `PROVENANCE.md`.
 
 ## 1. Design direction: Abyss Workbench
 
@@ -63,6 +63,16 @@ The elapsed chip is the top of a small right-aligned stack: the cache-hit rate r
 
 There is no permanent left sidebar. `Ctrl+S` opens a modal session picker and closes it after selection. P1 workflow/jobs and subagent trees are modal/list details, not competing columns. This explicitly rejects Grok's multi-root dashboard for v1 because the task requires one active session.
 
+### Team Center
+
+`Ctrl+T` and `/team` replace the single-column conversation with a full-screen control surface; they do not create a permanent dashboard column. `1 Roster`, `2 Tasks`, and `3 Activity` are mutually exclusive pages. `Esc` returns one modal level and then returns to the conversation.
+
+- Roster rows show role, runtime status, model, fresh/fork context, short Session id and diagnostics. `n` creates a lower-kebab-case teammate, `m` sends through the Lead mailbox, `x` interrupts only the current turn after confirmation, and Enter opens the complete Session as a read-only live or persisted transcript.
+- Tasks start unowned/pending. Enter opens all alpha.2 actions: claim, release, edit, set dependencies, complete, reopen, reassign and delete. Delete has a second confirmation. Every form captures the displayed revision; stale writes refresh the board and require the user to choose again.
+- Activity folds member lifecycle, queued/delivered mail and complete task revisions by durable Session sequence. These four events never become raw conversation cards.
+- The header always states the shared cwd and that write scopes are advisory. Official overlap warnings are visible; no wording implies worktrees, locks, confinement or automatic merge.
+- Opening the center starts one cancellable `waitForChange` loop. Closing it, switching the root Session or exiting cancels the watcher and releases every member transcript lease.
+
 ## 3. Transcript visual grammar
 
 - User messages use a blue left marker and normal foreground text; no filled chat bubble.
@@ -87,13 +97,14 @@ The default is Grok's Simple-mode vocabulary; v1 does not implement Vim mode. Re
 |---|---|---|
 | `Ctrl+P` or `?` | open fuzzy command palette | dsh command descriptors + local commands |
 | `Ctrl+S` | open persisted session picker | `sessionPersistence.list`, lazy `readFrom` per visible row, then `agents.resume` |
+| `Ctrl+T` | toggle full-screen Team Center | official `ctx.agentTeams`; the watcher is cancelled when the center closes |
 | `Ctrl+X` | open key reference | local overlay; chosen because Windows Terminal does not reliably distinguish control punctuation |
 | `Ctrl+C` | cancel active turn; when idle with a draft, clear draft; when idle/empty, request quit on second press | `agent.cancel` or local state; double action is shown before execution |
 | `Ctrl+M` | prompt focused: toggle multiline; scrollback focused: live model picker | local composer / `llm` catalog + Agent `ModelSelectionRef` |
 | `Ctrl+E` | expand/collapse every tool output and reasoning preview | local presentation over dsh blocks |
 | `Ctrl+Y` | copy the selected block, else the newest, to the clipboard | OSC 52 plus the platform clipboard tool |
 | `Shift+Tab` | cycle the advertised permission presets | `permissionPresets.names/current/set`; never cycles invented Grok modes |
-| `Tab` | move composer ↔ scrollback, or walk the active blocking card | local focus state |
+| `Tab` | move composer ↔ scrollback; on a Team blocking card, select the next pending request | local focus / unified interaction FIFO |
 | `Esc` | close top non-blocking overlay; park a blocking card; return focus | local only; no rejection/cancellation |
 | `PgUp` / `PgDn` | page the row viewport, from either focus | transcript viewport |
 | `Ctrl+U` / `Ctrl+D` | half-page up/down while scrollback is focused | transcript viewport |
@@ -125,7 +136,8 @@ The default is Grok's Simple-mode vocabulary; v1 does not implement Vim mode. Re
 | `y` or `1` | return `allowed-once` |
 | `n` or `2` | return `rejected` |
 | `3` | open permission-preset subpicker; successful preset change then allows this one request |
-| arrows, `Tab`, digits, `Enter` | select/activate an option |
+| arrows, digits, `Enter` | select/activate an option |
+| `Tab` / `Shift+Tab` | next/previous pending Team request without answering |
 | `Ctrl+F` | toggle full tool arguments/diff |
 | `Esc` | park focus in scrollback; request remains pending |
 | request abort | card closes and the service returns `cancelled` |
@@ -137,7 +149,8 @@ No “always allow this command” grant is shown because dsh exposes no equival
 | Key | Result |
 |---|---|
 | `Left` / `Right` | previous/next question |
-| `Up` / `Down`, `Tab` | move through options |
+| `Up` / `Down` | move through options |
+| `Tab` / `Shift+Tab` | next/previous pending Team request without answering |
 | `1`–`9` | choose an option directly |
 | `Space` | toggle an option in multi-select |
 | `z` | edit the free-text row |
@@ -146,7 +159,7 @@ No “always allow this command” grant is shown because dsh exposes no equival
 
 Required questions cannot submit empty. `plan-review` intent highlights the configured approve option; every other answer declines according to the real dsh intent contract.
 
-The same card serves the model-facing `ask_user_question` tool (`@deepseek-ai/dsh-tool-ask-user`) through the `ctx.userQuestions` provider this app registers: the tool's step stays blocked until the card returns, and the answer becomes an ordinary tool result. The provider answers only for the active root agent and only one live request; a subagent's request or a second concurrent one is rejected, because inventing an answer — or letting a background agent capture the card — would put words in the user's mouth. Committing the free-text row must close it: an open editor would swallow the arrows that move between questions.
+The same card serves the model-facing `ask_user_question` tool (`@deepseek-ai/dsh-tool-ask-user`) through the agent-scoped event. A 32-item FIFO accepts the active Team Lead and its rostered teammates, identifies every source, and leaves ordinary workflow children or unrelated Sessions to downstream providers. Switching root Sessions or exiting explicitly cancels questions; no answer is fabricated. Committing the free-text row closes it so arrows can keep navigating.
 
 ## 5. Slash command policy
 
@@ -171,6 +184,7 @@ Typing `/` opens a fuzzy menu combining `ctx.commands.list(agent)` with local TU
 | `/auto` | omit | newer host automation/review authority is not exposed without a dedicated TUI safety design |
 | `/view-plan` | omit | dsh projection exposes active/pending state, not a durable Grok plan file; plan review remains in the real question card/transcript |
 | `/workflows` | P1 read-only | current workflow/jobs list only; no dashboard control invented |
+| `/team` | local | full-screen official Team roster, task board, activity and read-only member Sessions |
 | `/dashboard` | omit | multi-root dashboard is a v1 non-goal |
 
 Grok vocabulary sources: `04-slash-commands.md:11-173,269-325`; plan semantics examined at `19-plan-mode.md:40-145`; permissions examined at `22-permissions-and-safety.md:10-137,375-406,532-536`. Where those semantics exceed dsh, the table deliberately degrades or omits them.

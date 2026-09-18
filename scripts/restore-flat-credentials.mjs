@@ -3,12 +3,25 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 /**
- * Harness 0.1.6-alpha.1 migrates ~/.dsh/.credentials.yaml to a versioned
+ * Harness 0.1.6 prereleases migrate ~/.dsh/.credentials.yaml to a versioned
  * `refs:` document. The machine's daily 0.1.0-rc.5 launcher still reads the
  * pre-release flat layout and rejects a numeric `version` key. After an
  * alpha-host real-profile run, flatten the file back so the daily driver boots.
  */
 const path = join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), '.credentials.yaml')
+const exactIndex = process.argv.indexOf('--exact')
+if (exactIndex >= 0) {
+  const suffix = process.argv[exactIndex + 1]
+  if (suffix === undefined || suffix === '' || suffix.includes('/') || suffix.includes('\\')) {
+    throw new Error('--exact requires one filename suffix, for example .pre-0.2.0')
+  }
+  const backup = `${path}${suffix}`
+  if (!existsSync(backup)) throw new Error(`Exact credential backup is missing: ${backup}`)
+  copyFileSync(backup, path)
+  console.log(JSON.stringify({ path, restored: true, exact: true, backup }))
+  process.exit(0)
+}
+
 if (!existsSync(path)) {
   console.log(JSON.stringify({ path, restored: false, reason: 'missing' }))
   process.exit(0)

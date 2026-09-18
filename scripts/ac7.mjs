@@ -9,14 +9,14 @@ const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
 const provenance = readFileSync(join(root, 'PROVENANCE.md'), 'utf8')
 const tables = [pkg.dependencies ?? {}, pkg.devDependencies ?? {}, pkg.peerDependencies ?? {}]
 const dsh = Object.entries(Object.assign({}, ...tables)).filter(([name]) => name.startsWith('@deepseek-ai/dsh-'))
-const target = '0.1.6-alpha.1'
+const target = '0.1.6-alpha.2'
 const badVersions = dsh.filter(([, version]) => version !== target)
 const missingIntegrity = dsh.filter(([name]) => !provenance.includes(`| \`${name}\` | \`${target}\` | \`sha512-`))
 const report = {
   directDshDependencies: dsh.map(([name, version]) => ({ name, version })),
   allExactTarget: badVersions.length === 0,
   allHaveSha512: missingIntegrity.length === 0,
-  sourceAnchor: provenance.includes('0a15e36e7f82b6ed45af6fa9759f29b40dcd965d'),
+  sourceAnchor: provenance.includes('ddefc45fbc7f8e46dd73185e68295696d1297887'),
   uxAnchor: provenance.includes('eb267feff13129e568df38fb6fdf0ceb65f735d6'),
   contractTable: provenance.includes('## 3. Contract cross-check'),
 }

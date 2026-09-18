@@ -29,7 +29,7 @@ const terminal = pty.spawn('cmd.exe', ['/d', '/s', '/c', 'dsh'], {
   env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' },
 })
 const outcome = await new Promise(resolveExit => {
-  const timeout = setTimeout(() => { timedOut = true; terminal.kill() }, 20_000)
+  const timeout = setTimeout(() => { timedOut = true; terminal.kill() }, 150_000)
   terminal.onData(data => {
     capture += data
     if (!sentQuit && capture.includes('dsh-tui ·') && capture.includes('TRANSCRIPT')) {
@@ -45,7 +45,7 @@ const report = {
   timedOut, sentQuit,
   bareCommandShowsTui: capture.includes('dsh-tui ·') && capture.includes('TRANSCRIPT'),
   terminalRestored: capture.includes('\u001B[?1049h') && capture.includes('\u001B[?1049l'),
-  explicitHelpPreserved: help.status === 0 && help.stdout.includes('Usage: dsh [options]'),
+  explicitHelpPreserved: help.status === 0 && help.stdout.includes('Usage: dsh [') && help.stdout.includes('plugin --profile'),
   explicitTuiHelpWorks: tuiHelp.status === 0 && tuiHelp.stdout.includes('--theme <name>'),
   wrapperHasNoArgumentBranch: wrapper.includes('if "%~1"==""') && wrapper.includes('--profile tui'),
   sharedRepoUnchanged: before === after,

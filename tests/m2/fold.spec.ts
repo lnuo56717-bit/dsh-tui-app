@@ -91,14 +91,14 @@ describe('M2 deterministic transcript fold', () => {
     expect(state.nodes).toMatchObject([{ kind: 'message', blocks: [{ type: 'text', text: 'summary' }] }])
   })
 
-  it('recognizes all 56 locked event names and renders an unknown event exactly once', () => {
-    expect(KNOWN_EVENT_TYPES).toHaveLength(56)
+  it('recognizes all 60 locked event names and renders an unknown event exactly once', () => {
+    expect(KNOWN_EVENT_TYPES).toHaveLength(60)
     let state = EMPTY_TRANSCRIPT
     KNOWN_EVENT_TYPES.forEach((type, seq) => { state = foldTranscript(state, event(seq, type, {})) })
     expect(state.nodes.filter(node => node.kind === 'raw')).toEqual([])
-    state = foldTranscript(state, event(56, 'future/sea-change', { payload: 'kept' }))
+    state = foldTranscript(state, event(60, 'future/sea-change', { payload: 'kept' }))
     expect(state.nodes.filter(node => node.kind === 'raw')).toEqual([
-      { kind: 'raw', id: 'raw:56', seq: 56, eventType: 'future/sea-change', data: { payload: 'kept' }, required: true },
+      { kind: 'raw', id: 'raw:60', seq: 60, eventType: 'future/sea-change', data: { payload: 'kept' }, required: true },
     ])
     expect(foldTranscript(state, event(44, 'future/sea-change', { payload: 'duplicate' }))).toBe(state)
   })

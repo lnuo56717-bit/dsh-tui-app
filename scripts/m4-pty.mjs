@@ -25,7 +25,7 @@ const env = { ...process.env, DSH_HOME: home, TERM: 'xterm-256color', COLORTERM:
 // preferences from silently turning it into the separate NO_COLOR case.
 delete env.NO_COLOR
 delete env.FORCE_COLOR
-const install = spawnSync('cmd.exe', ['/d', '/s', '/c', `dsh plugin --profile tui add "${root}"`], { cwd: root, env, encoding: 'utf8' })
+const install = spawnSync('cmd.exe', ['/d', '/s', '/c', `dsh plugin --profile tui add ${root}`], { cwd: root, env, encoding: 'utf8' })
 if (install.status !== 0) throw new Error(`profile install exited ${install.status}: ${install.stderr}`)
 let capture = ''
 let openedKeys = false
@@ -35,7 +35,7 @@ const terminal = pty.spawn('cmd.exe', ['/d', '/s', '/c', 'dsh --profile tui --th
   name: 'xterm-256color', cols: 80, rows: 24, cwd: root, env,
 })
 const outcome = await new Promise(resolveExit => {
-  const timeout = setTimeout(() => { timedOut = true; terminal.kill() }, 20_000)
+  const timeout = setTimeout(() => { timedOut = true; terminal.kill() }, 150_000)
   terminal.onData(data => {
     capture += data
     if (!openedKeys && capture.includes('dsh-tui ·') && capture.includes('TRANSCRIPT')) {

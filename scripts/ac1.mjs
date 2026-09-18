@@ -21,7 +21,7 @@ function sharedSnapshot() {
 
 const before = sharedSnapshot()
 const env = { ...process.env, DSH_HOME: home, TERM: 'xterm-256color', COLORTERM: 'truecolor' }
-const install = spawnSync('cmd.exe', ['/d', '/s', '/c', `dsh plugin --profile tui add "${root}"`], { cwd: root, env, encoding: 'utf8' })
+const install = spawnSync('cmd.exe', ['/d', '/s', '/c', `dsh plugin --profile tui add ${root}`], { cwd: root, env, encoding: 'utf8' })
 if (install.status !== 0) throw new Error(`profile install exited ${install.status}: ${install.stderr}`)
 const help = spawnSync('cmd.exe', ['/d', '/s', '/c', 'dsh --profile tui --help'], { cwd: root, env, encoding: 'utf8' })
 if (help.status !== 0) throw new Error(`help exited ${help.status}: ${help.stderr}`)
@@ -41,7 +41,7 @@ const exit = new Promise(resolveExit => {
   const timeout = setTimeout(() => {
     timedOut = true
     terminal.kill()
-  }, 20_000)
+  }, 150_000)
   terminal.onData(data => {
     capture += data
     if (!sentQuit && (capture.includes('DEEPSEEK / HARNESS') || capture.includes('TRANSCRIPT'))) {

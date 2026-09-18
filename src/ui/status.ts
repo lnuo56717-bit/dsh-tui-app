@@ -154,6 +154,9 @@ export function statusSegments(runtime: RuntimeSnapshot, detail = true): string[
   }
   const todos = projectionValue(runtime, 'todos')
   if (Array.isArray(todos)) segments.push(`todos ${todos.length}`)
+  if (runtime.teamSummary !== undefined) {
+    segments.push(`team ${runtime.teamSummary.running}/${runtime.teamSummary.teammates} active · ${runtime.teamSummary.pendingTasks} tasks`)
+  }
   return segments.map(redactSecrets)
 }
 

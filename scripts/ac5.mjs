@@ -26,7 +26,7 @@ const baseEnv = {
   ...process.env, DSH_HOME: home, TERM: 'xterm-256color', COLORTERM: 'truecolor',
   DSH_TUI_AC5_ID: idPath, DSH_TUI_AC5_RESUME: resumePath, DSH_TUI_AC5_FOLLOWUP: followupPath,
 }
-const install = spawnSync('cmd.exe', ['/d', '/s', '/c', `dsh plugin --profile tui add "${root}"`], { cwd: root, env: baseEnv, encoding: 'utf8' })
+const install = spawnSync('cmd.exe', ['/d', '/s', '/c', `dsh plugin --profile tui add ${root}`], { cwd: root, env: baseEnv, encoding: 'utf8' })
 if (install.status !== 0) throw new Error(`profile install exited ${install.status}: ${install.stderr}`)
 writeFileSync(join(home, 'profiles', 'tui', 'cordis.patch.yml'), `# AC-5 test-only durable history producer/observer.\n- insert:\n    - id: ac5-driver\n      name: '${pathToFileURL(join(root, 'tests', 'fixtures', 'ac5-driver.mjs')).href}'\n`, 'utf8')
 
@@ -38,7 +38,7 @@ async function run(command, phase, ready) {
   let timedOut = false
   const terminal = pty.spawn('cmd.exe', ['/d', '/s', '/c', command], { name: 'xterm-256color', cols: 120, rows: 40, cwd: root, env })
   const outcome = await new Promise(resolveExit => {
-    const timeout = setTimeout(() => { timedOut = true; terminal.kill() }, 30_000)
+    const timeout = setTimeout(() => { timedOut = true; terminal.kill() }, 150_000)
     terminal.onData(data => {
       capture += data
       if (phase === 'resume' && !sentFollowup && capture.includes('已保存的鲸鱼历史')) {

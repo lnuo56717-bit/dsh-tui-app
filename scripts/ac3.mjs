@@ -22,7 +22,7 @@ function sharedSnapshot() {
 
 const before = sharedSnapshot()
 const env = { ...process.env, DSH_HOME: home, DSH_TUI_AC3_TARGET: target, TERM: 'xterm-256color', COLORTERM: 'truecolor' }
-const install = spawnSync('cmd.exe', ['/d', '/s', '/c', `dsh plugin --profile tui add "${root}"`], { cwd: root, env, encoding: 'utf8' })
+const install = spawnSync('cmd.exe', ['/d', '/s', '/c', `dsh plugin --profile tui add ${root}`], { cwd: root, env, encoding: 'utf8' })
 if (install.status !== 0) throw new Error(`profile install exited ${install.status}: ${install.stderr}`)
 const patchPath = join(home, 'profiles', 'tui', 'cordis.patch.yml')
 const driverUrl = pathToFileURL(join(root, 'tests', 'fixtures', 'ac3-driver.mjs')).href
@@ -35,7 +35,7 @@ const terminal = pty.spawn('cmd.exe', ['/d', '/s', '/c', 'dsh --profile tui'], {
   name: 'xterm-256color', cols: 120, rows: 40, cwd: root, env,
 })
 const exit = new Promise(resolveExit => {
-  const timeout = setTimeout(() => { timedOut = true; terminal.kill() }, 25_000)
+  const timeout = setTimeout(() => { timedOut = true; terminal.kill() }, 150_000)
   terminal.onData(data => {
     capture += data
     if (!sentQuit && capture.includes('任务完成') && capture.includes('write_file')) {

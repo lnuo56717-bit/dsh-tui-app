@@ -2,46 +2,21 @@
 
 A full-screen terminal interface (TUI) for DeepSeek Harness (`dsh`), built as an independent, out-of-tree plugin. It runs in the same process as the `dsh` host, combines the durable Session V3 log with the process-local assistant stream, and uses host projections only for auxiliary status facts. The Chafa-generated DeepSeek whale is its one visual signature.
 
-## Upgrade handoff — 2026-09-17
+## 0.2.0 — Agent Teams
 
-Work continues on branch `codex/harness-0.1.6-upgrade`. The upgrade target is the immutable official prerelease `dsh-v0.1.6-alpha.1` (`0a15e36e7f82b6ed45af6fa9759f29b40dcd965d`), not moving `master`. Commits through `4855c06` are pushed to `origin/codex/harness-0.1.6-upgrade`; the continuation described below remains a verified working-tree change until it is reviewed and committed.
+This branch targets the immutable official prerelease `dsh-v0.1.6-alpha.2` (`ddefc45fbc7f8e46dd73185e68295696d1297887`), not moving `master`.
 
-Completed implementation:
+- The official Team domain and nine official model tools load by default. The fixed upstream policy creates teammates only after an explicit user request; the TUI creates one only from the Team Center's own form.
+- `Ctrl+T` or `/team` opens the full-screen Team Center: Roster, shared Tasks and ordered Activity. Roster controls create fresh/fork teammates, send Lead-authored messages, interrupt a current turn, and open complete read-only live or persisted member transcripts.
+- The task board supports create, claim, release, edit, dependency changes, complete, reopen, reassign and delete. Every mutation carries the revision shown on screen; a conflict refreshes and requires a new confirmation instead of overwriting.
+- All members share the Lead's cwd. Write scopes remain advisory and official `writeScopeWarnings` are displayed; the TUI does not claim file isolation, add worktrees, or invent locks.
+- Team lifecycle, task and mailbox events are folded into Team Activity instead of raw cards. Delivered peer prompts retain the concrete teammate source in the transcript.
+- Approvals and structured questions now share a bounded 32-item FIFO across the Lead and current teammates. Cards show member, role and Session id; `Tab`/`Shift+Tab` selects a request, and permission changes apply only to that request's Session.
+- The prior Session V3, real live/final TPS, model/effort switching, Grok-style reasoning, image, PTC, IME and terminal-safety behavior remains intact.
 
-- Pinned all direct Harness packages to exact npm version `0.1.6-alpha.1`, Cordis to `4.0.2`, and the plugin loader to `1.0.3`; regenerated `package-lock.json`.
-- Added a centralized Session V3 compatibility boundary for `snapshotEvents()`, branded replacement ranges, and legacy `.events` hosts. Both current `{startSeq,endSeq}` and rollout-era `{start,end}` replacement shapes are normalized.
-- Moved live rendering and real TPS to process-local `agent/assistant-stream` frames. Transient chunks do not consume durable sequence numbers; committed compact streams restore the final average TPS after completion or resume.
-- Adapted agent creation, async `agent/created`, SessionHandle persistence reads/closure, V3 seed lineage, Session-backed permission lookup, four-argument command execution, and agent-scoped structured questions. Old-host bridges remain narrowly scoped for staged rollout.
-- Made the old DeepSeek image serializer a compatibility fallback only. A current adapter advertising native image input owns its own Messages/Files serialization.
-- Recognized `image/offload` as non-visual durable metadata so image request offloading does not create a raw transcript card.
-- Folded Session V3 `tool/ptc-dispatch-start` / `tool/ptc-dispatch` into the existing recursive tool tree while retaining legacy V2 `tool/code-dispatch*` compatibility and structured settlement errors.
-- Classified the confirmed log-only `model/selection`, subagent catalog/policy, deliverables, and message-feedback mutation events as metadata so they remain inspectable without producing raw transcript cards.
-- Kept experimental high-authority features out of the TUI. In particular, the new `auto` permission preset is filtered from selectable/cyclable presets because this TUI has no Auto-review safety surface; browser/computer control, SSH workspaces, teams, and Auto review are not auto-enabled.
-- Retained a small read-only decoder solely for rescuing torn V2 JSONL logs; healthy historical migration remains owned by Harness.
-- Updated acceptance fixtures and documentation for the new lifecycle and compact Assistant stream contracts.
+Release verification completed on 2026-09-18: `check`, 43 Vitest files / 169 tests, build, production audit (0 vulnerabilities), the complete legacy AC suite, live timer, structured questions, real Team PTY, and the bare `dsh` PTY all passed. Every PTY gate reported `D:\deepseek-harness` unchanged and restored the terminal; release cleanup restored the exact pre-0.2.0 credential backup.
 
-Verification re-run after the safe PTC/log-only-event continuation:
-
-- `npm run check`, `npm test` (40 files / 156 tests), `npm run build`, `git diff --check`, and `npm audit --omit=dev --audit-level=high` all passed; audit reported 0 vulnerabilities.
-- `npm run test:ac:all` passed, including live streaming, tools/diffs, approval allow/reject, resume/history integrity, narrow layout, dependency/provenance locks, and the Windows ConPTY 256-color case (ambient `NO_COLOR=1` cleared so it could not inherit the monochrome path).
-- `npm run test:gate:alpha` passed end to end, including the full acceptance suite, live elapsed timer, structured question card, credential restoration, and colored whale under the exact alpha host.
-- Every acceptance snapshot reported `D:\deepseek-harness` unchanged. Pre-existing dirty files there were left alone.
-
-Alpha-host V3 release gate, run against the exact side-by-side npm prefix:
-
-- Installed `@deepseek-ai/dsh@0.1.6-alpha.1` at `.alpha-host/` (`npm install --global --prefix .alpha-host @deepseek-ai/dsh@0.1.6-alpha.1`). That directory is gitignored. `scripts/with-alpha-host.ps1` prepends it to `PATH` for one command.
-- `npm run test:ac:all`, `npm run test:timer`, and `npm run test:ask-user` all passed with `dsh --version` reporting `0.1.6-alpha.1`. The timer probe wrote a V3 artifact (`session.v3.jsonl.zstd`) and then deleted it.
-- The alpha host migrated `~/.dsh/.credentials.yaml` to the versioned `refs:` layout. The gate restored the pre-gate flat credentials afterwards through `scripts/restore-flat-credentials.mjs`; a backup remains at `~/.dsh/.credentials.yaml.pre-alpha-v3`.
-- Windows ConPTY/node-pty sometimes omits a numeric exit code after a clean quit; PTY acceptance now treats a missing code as success and still fails on any actual nonzero status.
-- The current bare launcher at `D:\Apps\npm-global\dsh.cmd` reports `0.1.6-alpha.1`. `D:\deepseek-harness` dirty files were not discarded or modified by the gate.
-
-Still unfinished:
-
-- MCP resource/URI-template browsing and the `@` attachment picker still need a coherent terminal interaction and attachment-lifecycle design.
-- Auto review, browser/computer control, SSH workspaces, and Agent Teams remain deliberately disabled until each has an explicit, fail-closed safety surface.
-- The current PTC/log-only-event continuation is tested but not yet committed or pushed.
-
-Detailed dependency hashes and seam decisions are in [PROVENANCE.md](PROVENANCE.md).
+The gate used `.alpha2-host` without modifying `.alpha-host` or the upstream checkout. Only after it passed was this machine's default wrapper switched to alpha.2; `dsh.cmd.pre-0.1.6-alpha.2`, the alpha.1 prefix, Profile manifests and credential backups remain available through `scripts/rollback-alpha1.ps1`. Detailed hashes and seam decisions are in [PROVENANCE.md](PROVENANCE.md).
 
 <p align="center">
   <img src="assets/screenshots/empty-session.png" alt="An empty dsh-tui session with the Chafa-generated DeepSeek whale" width="720">
@@ -59,7 +34,8 @@ Detailed dependency hashes and seam decisions are in [PROVENANCE.md](PROVENANCE.
 - **Multiline editing & history** — multiline prompts, queued follow-ups, prompt history recall (`↑` on an empty composer; the wheel never recalls history), and explicit step steering.
 - **Live model & effort switching** — `/switch` changes the next not-yet-assembled step; `/effort` only offers exact-model levels advertised by the active adapter. Nothing is hard-coded: catalogs and capabilities come from `ctx.llm`.
 - **Reasoning disclosure** — Grok-style views over real dsh reasoning events: a width-1 spinner on the live thought, live tail, stable settled summary, bounded preview, and an independently scrollable detail view.
-- **Native structured questions** — the app registers an agent-scoped `user-questions/request` answerer (plus the legacy provider bridge during staged upgrades), so a profile that loads `@deepseek-ai/dsh-tool-ask-user` gives the model a working `ask_user_question`: the tool blocks, the QuestionCard collects a keyboard answer, and the answer returns as an ordinary tool result. Only the active root agent may ask; a subagent's request is refused rather than answered on the user's behalf. See [Enabling ask_user_question](#enabling-ask_user_question).
+- **Native structured questions** — an agent-scoped `user-questions/request` answerer lets a loaded `@deepseek-ai/dsh-tool-ask-user` block until the QuestionCard returns a real keyboard answer. The unified FIFO accepts only the current Team Lead and rostered teammates; ordinary workflow children and unrelated Sessions stay downstream. See [Enabling ask_user_question](#enabling-ask_user_question).
+- **Agent Teams control** — the exact alpha.2 TeamService owns roster, mailbox, recovery and task CAS. `Ctrl+T`/`/team` exposes all released controls without copying its state machine or persistence.
 - **Session picker** — `/resume` (and `Ctrl+S`) lists persisted conversations by their durable title (or opening prompt), prompt count, and age, with a current-session marker.
 - **Task and conversation timing** — while a turn runs, the header chip counts its elapsed seconds from the same live clock that steps the thinking spinner; when the turn closes, the chip states that turn's span and the conversation's accumulated task time. Both come from the log's own `turn/start`/`turn/end` timestamps, so a resumed session restates a real total, and a turn Harness never timestamped is not counted rather than estimated.
 - **Live token throughput** — while the model is streaming, the header shows `⚡ 27.5 tok/s` and refreshes it from the same 80 ms live clock. The count comes from Harness's real `agent/assistant-stream` token-boundary frames—not character length. The temporary display never consumes a durable Session sequence number; the committed V3 stream and provider usage establish the final average, which remains visible while idle.
@@ -69,7 +45,7 @@ Detailed dependency hashes and seam decisions are in [PROVENANCE.md](PROVENANCE.
 
 ## Requirements
 
-- DeepSeek Harness `dsh-v0.1.6-alpha.1` for the full Session V3/live-stream contract. The source upgrade does not download, replace, or patch the machine's existing launcher.
+- DeepSeek Harness `dsh-v0.1.6-alpha.2` for the full Session V3/live-stream and Agent Teams contract. Installation does not patch the Harness source checkout.
 - Node.js 22 or newer (Node.js 24 is used in CI)
 - npm and pnpm for the `dsh plugin` workflow
 - Windows Terminal on Windows; modern xterm-compatible terminals are best effort elsewhere
@@ -134,7 +110,7 @@ without a provider (for example the `grok` TUI) fails every call with
 
 ## Slash commands
 
-`/switch [provider/model]`, `/effort [default|level]`, `/model` (a `/switch` alias), `/new`, `/resume`, `/session-info`, `/rename`, `/theme`, `/workflows`, `/mouse`, `/keys`, `/help`, `/quit`.
+`/team`, `/switch [provider/model]`, `/effort [default|level]`, `/model` (a `/switch` alias), `/new`, `/resume`, `/session-info`, `/rename`, `/theme`, `/workflows`, `/mouse`, `/keys`, `/help`, `/quit`.
 
 Commands advertised by dsh execute through the host command registry; exact-name collisions remain visibly separate as `[dsh]` and `[tui]` entries.
 
@@ -150,6 +126,7 @@ Commands advertised by dsh execute through the host command registry; exact-name
 | `Ctrl+W`, `Ctrl+U`, `Ctrl+K` | delete word / to line start / to line end |
 | `Ctrl+P` or `?` | open fuzzy dsh + local command palette |
 | `Ctrl+S` | open persisted session picker |
+| `Ctrl+T` | open or close the full-screen Agent Teams control center |
 | `Ctrl+X` | open the complete in-app key page |
 | `Ctrl+Y` | copy the selected block, the composer's mouse selection, or the newest block, to the clipboard |
 | `Ctrl+E` | expand/collapse every tool output and reasoning preview |
@@ -167,7 +144,7 @@ Commands advertised by dsh execute through the host command registry; exact-name
 | `Shift`+drag | the terminal's own selection and copy, unaffected by mouse tracking |
 | `Ctrl+C` | cancel a running turn; otherwise clear draft; press twice when idle/empty to quit |
 
-Approvals use `y`/`1` (allow once), `n`/`2` (reject), or `3` (change the real permission preset and then allow once). Questions use arrows, digits, Space for multi-select, `z` for free text, and Enter to advance/submit.
+Approvals use `y`/`1` (allow once), `n`/`2` (reject), or `3` (change the requesting Agent's real permission preset and then allow once). Questions use arrows, digits, Space for multi-select, `z` for free text, and Enter to advance/submit. When several Team members are waiting, `Tab`/`Shift+Tab` walks the FIFO without answering anything.
 
 ## Web UI comparison
 
@@ -181,6 +158,7 @@ Approvals use `y`/`1` (allow once), `n`/`2` (reject), or `3` (change the real pe
 | Long tool output | Preformatted, folded to a sized preview, keyboard-expandable | Collapsible browser panel |
 | Copying output | `Ctrl+Y` per block, `Shift`+drag, `/mouse` off | Browser selection |
 | Approvals and structured user questions | Keyboard-first, fail-closed | Browser controls |
+| Agent Teams | Full roster, task board, activity, messages, interrupt and read-only member Sessions | Browser team surfaces |
 | Projection status (tokens/context/stats/plan/todos) | Short footer + `/session-info` | Rich panels |
 | Themes | Abyss/Pearl + capability fallbacks | Browser theme system |
 | CJK and grapheme-safe editing | Yes, Windows Terminal validated | Browser text engine |
@@ -198,15 +176,15 @@ npm run build
 npm run test:ac:all
 ```
 
-The full local acceptance requires a matching `0.1.6-alpha.1` `dsh` launcher for AC-1 through AC-5. Do not replace this machine's daily `dsh 0.1.0-rc.5` wrapper to get one. Install a side-by-side copy and run the gate through it:
+The full local acceptance requires the exact `0.1.6-alpha.2` launcher. Install it side by side; do not replace the daily launcher before the gate passes:
 
 ```powershell
-npm install --global --prefix .\.alpha-host @deepseek-ai/dsh@0.1.6-alpha.1
-npm run test:ac:alpha
-npm run test:gate:alpha
+npm install --global --prefix .\.alpha2-host @deepseek-ai/dsh@0.1.6-alpha.2
+npm run test:ac:alpha2
+npm run test:gate:alpha2
 ```
 
-`scripts/with-alpha-host.ps1` prepends `.alpha-host` to `PATH` for one command. CI runs the static suite on `windows-latest`; real-profile PTY acceptance remains a local/release gate because CI does not install another Harness copy.
+`scripts/with-alpha2-host.ps1` prepends `.alpha2-host` to `PATH` for one command. `npm run test:team:pty` additionally drives a real 80×24 Team Center and the task lifecycle. The alpha.1 prefix remains untouched for rollback.
 
 `npm run test:timer` is a local-only end-to-end check of the elapsed-time chip: a read-only `--patch` overlay adds a driver that opens and closes two real turns on the real session clock, and the probe asserts the footer counted up once a second while a turn was open and then stated the conversation total that matches the logged spans. Like the check below, it edits nothing under `$DSH_HOME` and deletes the session its own probe created.
 
@@ -223,11 +201,12 @@ npm run test:gate:alpha
 - The elapsed chip times turns, not wall-clock conversation length: the seconds you spend typing between turns are not in the total, and the last-turn/total pair is dropped for the headline number when the header is too narrow to hold both. A turn left open by a failed agent parks the chip on its settled facts instead of counting up forever.
 - Multi-line dsh command output (like `/goal`'s status view) folds onto the one-line status footer; re-run the command to read the full text.
 - `@` remains ordinary prompt text; files and richer attachment pickers need an explicit TUI interaction design before the newer host capability is exposed.
-- This upgrade intentionally does not auto-enable new high-authority Harness services such as browser/computer control, SSH workspaces, teams, or auto review.
+- Agent Teams is experimental and one Harness process must control a Team. Teammates cannot be deleted or retired in alpha.2; interrupt stops only the current turn and the identity remains.
+- Browser/computer control, SSH workspaces and auto review remain disabled pending separate safety surfaces.
 - Images render as attachment labels, not terminal pixels. The whale is a pre-generated ASCII asset.
 - No transcript-content search, multi-root dashboard, remote attach, ACP bridge, persistent per-command grants, or invented `/auto` policy.
 - Workflow/subagent views are read-only durable summaries. They do not dispatch concurrent root sessions.
-- `ask_user_question` is answered only for the active root agent and only one request at a time; a subagent's or a concurrent second request is refused, never auto-answered. The tool is not in any dsh bundle by default — a profile must load it.
+- `ask_user_question` is accepted for the active Team Lead and rostered teammates, up to 32 pending interactions; ordinary workflow children and other Sessions continue downstream. Nothing is auto-answered. The tool is not in any dsh bundle by default — a profile must load it.
 - `auto` does not send a blocking terminal-background query; when detection is unreliable it chooses Abyss.
 
 ## License & provenance

@@ -20,6 +20,7 @@ import { elapsedLabel, settledTiming, SPIN_TICK_MS, THINKING_REST_GLYPH, thinkin
 import { composerCaret } from './cursor.js'
 import { terminalSequences } from './terminal.js'
 import { focusableBlocks, ReasoningDetailView, TranscriptView, viewportWindow, type RowSelection, type TranscriptBlockRef } from './transcript-view.js'
+import { TeamCenter } from './team-center.js'
 
 export interface ShellProps extends TuiStartupValues {
   store?: TranscriptStore
@@ -52,6 +53,7 @@ const EMPTY_STORE = new TranscriptStore()
 const READ_ONLY_RUNTIME: RuntimeSnapshot = Object.freeze({
   sessionId: undefined, cwd: process.cwd(), model: 'model —', agentStatus: 'idle', permission: undefined,
   projection: undefined, theme: 'auto', notice: undefined, error: undefined, approval: undefined, questions: undefined,
+  interactionCount: 0, interactionIndex: 0, teamSummary: undefined,
   pendingImages: [], imageInput: false,
 })
 const noopSubscribe = (): (() => void) => () => {}
@@ -151,13 +153,13 @@ function Panel({ overlay, editor, controller, runtime, store, theme, plain, widt
     <Text><Text bold>Send</Text>  Enter prompt · Ctrl+M multiline · Alt+Enter send · Ctrl+L steer</Text>
     <Text><Text bold>Image</Text>  Ctrl+O clipboard · /image path · Backspace on empty prompt removes last</Text>
     <Text><Text bold>Edit</Text>  Ctrl+W word · Ctrl+U to start · Ctrl+K to end · ↑ history</Text>
-    <Text><Text bold>Open</Text>  Ctrl+P/? commands · Ctrl+S sessions · Ctrl+X keys</Text>
+    <Text><Text bold>Open</Text>  Ctrl+P/? commands · Ctrl+S sessions · Ctrl+T Agent Teams · Ctrl+X keys</Text>
     <Text><Text bold>Blocks</Text> Tab then ↑↓ select · ←/→ fold tool output and thoughts · Enter full</Text>
     <Text><Text bold>Copy</Text>  Ctrl+Y copies the selected block or mouse selection · release after a transcript drag also copies</Text>
     <Text><Text bold>Move</Text>  Tab focus · PgUp/PgDn page · Ctrl+U/D half page · wheel scrolls · Esc back/park</Text>
     <Text><Text bold>Mouse</Text>  click the composer to move the caret · drag selects · click the transcript to focus a block</Text>
     <Text><Text bold>Policy</Text> Shift+Tab cycles only advertised dsh permission presets</Text>
-    <Text><Text bold>Blockers</Text> approval y/n/3 · questions arrows/digits/Space/z/Enter</Text>
+    <Text><Text bold>Blockers</Text> Tab/Shift+Tab request · approval y/n/3 · questions arrows/digits/Space/z/Enter</Text>
     <Text><Text bold>Stop</Text>  Esc stops the turn · Enter sends your draft, Enter again or Esc takes over with it · Ctrl+C cancel, clear draft, then confirm quit</Text>
   </PanelFrame>
   if (overlay.kind === 'session-info') return <PanelFrame title="SESSION INFO" theme={theme} plain={plain}>
@@ -214,8 +216,11 @@ function PanelFrame({ title, theme, children, plain }: { title: string; theme: T
 function ApprovalCard({ runtime, focused, theme, plain }: { runtime: RuntimeSnapshot; focused: boolean; theme: Theme; plain: boolean }): React.JSX.Element | null {
   const request = runtime.approval
   if (request === undefined) return null
+  const origin = request.source ?? { member: 'lead', role: 'lead', sessionId: runtime.sessionId ?? 'session —' }
+  const source = `${origin.member} · ${origin.role} · ${middleEllipsis(origin.sessionId, 14)}`
   return <Box borderStyle={plain ? 'classic' : 'double'} borderColor={focused ? theme.warning : theme.border} flexDirection="column" paddingX={1} flexShrink={0}>
-    <Text bold color={theme.warning}>PERMISSION REQUIRED · {request.toolName}</Text>
+    <Text bold color={theme.warning}>PERMISSION REQUIRED · {request.toolName} · {(runtime.interactionIndex ?? 0) + 1}/{runtime.interactionCount ?? 1}</Text>
+    <Text color={theme.muted}>{source}</Text>
     {request.reason !== undefined && <Text color={theme.text}>{request.reason}</Text>}
     {request.callId !== undefined && <Text color={theme.muted}>call {request.callId}</Text>}
     <Text><Text bold color={theme.success}>y / 1 allow once</Text><Text color={theme.muted}>   </Text><Text bold color={theme.danger}>n / 2 reject</Text><Text color={theme.muted}>   3 change preset + allow</Text></Text>
@@ -229,8 +234,11 @@ function QuestionCard({ runtime, ui, focused, theme, plain }: { runtime: Runtime
   const question = request.questions[ui.index]
   if (question === undefined) return null
   const selected = new Set(ui.selections[question.id] ?? [])
+  const origin = request.source ?? { member: 'lead', role: 'lead', sessionId: runtime.sessionId ?? 'session —' }
+  const source = `${origin.member} · ${origin.role} · ${middleEllipsis(origin.sessionId, 14)}`
   return <Box borderStyle={plain ? 'classic' : 'double'} borderColor={focused ? theme.primary : theme.border} flexDirection="column" paddingX={1} flexShrink={0}>
-    <Text bold color={theme.primary}>{question.header ?? 'QUESTION'} · {ui.index + 1}/{request.questions.length}</Text>
+    <Text bold color={theme.primary}>{question.header ?? 'QUESTION'} · {ui.index + 1}/{request.questions.length} · queue {(runtime.interactionIndex ?? 0) + 1}/{runtime.interactionCount ?? 1}</Text>
+    <Text color={theme.muted}>{source}</Text>
     <Text color={theme.text}>{question.question}</Text>
     {question.detail !== undefined && <Text color={theme.muted}>{question.detail}</Text>}
     {question.options.map((option, index) => {
@@ -297,6 +305,7 @@ export function Shell(props: ShellProps): React.JSX.Element {
   const [focus, setFocus] = useState<'composer' | 'transcript'>('composer')
   const [scrollOffset, setScrollOffset] = useState(0)
   const [overlay, setOverlay] = useState<Overlay | undefined>()
+  const [teamOpen, setTeamOpen] = useState(false)
   const [expandedBlocks, setExpandedBlocks] = useState<ReadonlySet<string>>(() => new Set())
   const [focusedBlockKey, setFocusedBlockKey] = useState<string | undefined>()
   const [reasoningDetail, setReasoningDetail] = useState<{ key: string; offset: number; follow: boolean } | undefined>()
@@ -400,6 +409,7 @@ export function Shell(props: ShellProps): React.JSX.Element {
   }, [runtime.questions?.id, questionUi.requestId])
 
   useEffect(() => {
+    setTeamOpen(false)
     setExpandedBlocks(new Set())
     setFocusedBlockKey(undefined)
     setReasoningDetail(undefined)
@@ -650,6 +660,7 @@ export function Shell(props: ShellProps): React.JSX.Element {
       if (action === 'quit') exit()
       else if (action === 'mouse') toggleMouse()
       else if (action === 'workflows') openWorkflows()
+      else if (action === 'team') setTeamOpen(true)
       else if (action === 'models') openModels()
       else if (action === 'efforts') openEfforts()
       else if (action === 'help' || action === 'keys' || action === 'session-info' || action === 'confirm-danger' || action === 'confirm-new') setOverlay({ kind: action })
@@ -801,6 +812,7 @@ export function Shell(props: ShellProps): React.JSX.Element {
 
   useInput((input, key) => {
     if (key.eventType === 'release') return
+    if (teamOpen && runtime.approval === undefined && runtime.questions === undefined) return
     const wheel = parseWheelBurst(input)
     if (wheel.notches !== 0) {
       // Over an open picker the wheel walks that list; otherwise it scrolls the transcript.
@@ -826,11 +838,12 @@ export function Shell(props: ShellProps): React.JSX.Element {
 
     if (runtime.approval !== undefined && blockingFocused && overlay === undefined) {
       if (key.ctrl && input === 'c') controller?.cancel()
+      else if (key.tab && (runtime.interactionCount ?? 1) > 1) controller?.selectInteraction(key.shift ? -1 : 1)
       else if (input === 'y' || input === '1') controller?.answerApproval('allowed-once')
       else if (input === 'n' || input === '2') controller?.answerApproval('rejected')
       else if (input === '3') setOverlay({ kind: 'permissions', selected: 0, forApproval: true })
-      else if (key.upArrow || key.leftArrow || key.shift && key.tab) setApprovalOption(value => (value + 2) % 3)
-      else if (key.downArrow || key.rightArrow || key.tab) setApprovalOption(value => (value + 1) % 3)
+      else if (key.upArrow || key.leftArrow) setApprovalOption(value => (value + 2) % 3)
+      else if (key.downArrow || key.rightArrow) setApprovalOption(value => (value + 1) % 3)
       else if (key.return) approvalOption === 0 ? controller?.answerApproval('allowed-once') : approvalOption === 1 ? controller?.answerApproval('rejected') : setOverlay({ kind: 'permissions', selected: 0, forApproval: true })
       else if (key.escape) setBlockingFocused(false)
       return
@@ -840,6 +853,7 @@ export function Shell(props: ShellProps): React.JSX.Element {
       const question = runtime.questions.questions[questionUi.index]
       if (question === undefined) return
       if (key.ctrl && input === 'c') { controller?.cancel(); return }
+      if (key.tab && (runtime.interactionCount ?? 1) > 1) { controller?.selectInteraction(key.shift ? -1 : 1); return }
       if (questionUi.customEditing) {
         // Arrows leave free-text mode first and then act, so a card with an
         // open "z. Other" field can still be walked and answered by keyboard.
@@ -855,8 +869,8 @@ export function Shell(props: ShellProps): React.JSX.Element {
       }
       if (key.leftArrow) setQuestionUi({ ...questionUi, index: Math.max(0, questionUi.index - 1), option: 0 })
       else if (key.rightArrow) setQuestionUi({ ...questionUi, index: Math.min(runtime.questions.questions.length - 1, questionUi.index + 1), option: 0 })
-      else if (key.upArrow || key.shift && key.tab) setQuestionUi({ ...questionUi, option: Math.max(0, questionUi.option - 1) })
-      else if (key.downArrow || key.tab) setQuestionUi({ ...questionUi, option: Math.min(Math.max(0, question.options.length - 1), questionUi.option + 1) })
+      else if (key.upArrow) setQuestionUi({ ...questionUi, option: Math.max(0, questionUi.option - 1) })
+      else if (key.downArrow) setQuestionUi({ ...questionUi, option: Math.min(Math.max(0, question.options.length - 1), questionUi.option + 1) })
       else if (/^[1-9]$/u.test(input)) answerCurrentQuestion(Number(input) - 1)
       else if (input === ' ' && question.multiSelect) answerCurrentQuestion()
       else if (input === 'z') setQuestionUi({ ...questionUi, customEditing: true })
@@ -966,6 +980,7 @@ export function Shell(props: ShellProps): React.JSX.Element {
       return
     }
     if (key.ctrl && input === 'p' || input === '?' && editor.text === '') { setEditor({ ...EMPTY_EDITOR, text: '/', cursor: 1 }); setOverlay({ kind: 'commands', selected: 0 }); return }
+    if (key.ctrl && input === 't') { setTeamOpen(value => !value); return }
     if (key.ctrl && input === 's') { openSessions(); return }
     if (key.ctrl && input === 'x') { setOverlay({ kind: 'keys' }); return }
     if (key.shift && key.tab) { controller?.cyclePermission(); return }
@@ -1132,9 +1147,9 @@ export function Shell(props: ShellProps): React.JSX.Element {
       : Math.max(...metrics.map(metric => metric.cells)) + 2
   const statusLine = formatFooter(runtime, runtime.error ?? runtime.notice, footerCells, !veryNarrow)
   const help = runtime.approval !== undefined
-    ? 'y allow · n reject · Esc park'
+    ? 'y allow · n reject · Tab next request · Esc park'
     : runtime.questions !== undefined
-      ? 'arrows choose · Enter answer · Esc park'
+      ? 'arrows choose · Tab next request · Enter answer · Esc park'
       : overlay !== undefined
         ? '↑↓ choose · Enter open · Esc close'
         : reasoningDetail !== undefined
@@ -1147,8 +1162,12 @@ export function Shell(props: ShellProps): React.JSX.Element {
                 : stopArmed
                   ? 'Enter again to stop · Esc stops now'
                   : 'Esc stop · Enter sends · Enter again takes over'
-              : 'Enter send · Ctrl+O image · Ctrl+P commands · Ctrl+Y copy last block'
+              : 'Enter send · Ctrl+T team · Ctrl+O image · Ctrl+P commands · Ctrl+Y copy last block'
   const helpLine = middleEllipsis(quitArmed ? 'Ctrl+C again to quit' : compact ? help : `${help} · Ctrl+S sessions · Shift+Tab permissions`, Math.max(1, columns - margin * 2))
+
+  if (teamOpen && controller !== undefined && runtime.approval === undefined && runtime.questions === undefined) {
+    return <TeamCenter controller={controller} width={columns} height={rows} theme={theme} plain={veryNarrow} onClose={() => setTeamOpen(false)} />
+  }
 
   return (
     <Box width={columns} height={rows} flexDirection="column" backgroundColor={theme.canvas}>

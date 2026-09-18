@@ -13,12 +13,17 @@ import type { ThemeName } from './startup.js'
 import { redactSecrets } from './ui/secrets.js'
 import { parseRawSessionEvents, repairedSeed } from './session-repair.js'
 import { foldSessionSummary, type SessionSummaryFacts } from './session-summary.js'
-import { EMPTY_TRANSCRIPT, type EventLike } from './transcript-fold.js'
+import { EMPTY_TRANSCRIPT, foldEvents, type EventLike } from './transcript-fold.js'
 import { attachTranscript, TranscriptStore, type AttachedTranscript } from './transcript-store.js'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { loadClipboardImage, loadImageFile, unquotePath, type LoadedImage } from './image-input.js'
 import { VISION_MODEL_ID } from './vision-models.js'
 import { eventLikes, sessionEventLikes, sessionEvents } from './harness-compat.js'
+import {
+  foldTeamActivity, TEAMMATE_NAME, teammatePrompt, teamTaskId,
+  type TeamActivityItem, type TeamMemberView, type TeamServiceLike, type TeamTaskView, type TeamViewSnapshot,
+  type UpdateTeamTaskRequest,
+} from './team.js'
 
 export type ApprovalOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'
 
@@ -27,6 +32,7 @@ export interface ApprovalRequestView {
   readonly toolName: string
   readonly callId: string | undefined
   readonly reason: string | undefined
+  readonly source?: InteractionSourceView
 }
 
 export interface QuestionOptionView {
@@ -47,6 +53,13 @@ export interface QuestionItemView {
 export interface QuestionRequestView {
   readonly id: number
   readonly questions: readonly QuestionItemView[]
+  readonly source?: InteractionSourceView
+}
+
+export interface InteractionSourceView {
+  readonly member: string
+  readonly role: 'lead' | 'teammate'
+  readonly sessionId: string
 }
 
 export interface QuestionAnswerItem {
@@ -105,10 +118,19 @@ export interface RuntimeSnapshot {
   readonly error: string | undefined
   readonly approval: ApprovalRequestView | undefined
   readonly questions: QuestionRequestView | undefined
+  readonly interactionCount?: number
+  readonly interactionIndex?: number
+  readonly teamSummary?: TeamSummaryView | undefined
   /** Images staged for the next prompt; not yet in the session log. */
   readonly pendingImages: readonly PendingImageView[]
   /** Whether the live model advertises image input. */
   readonly imageInput: boolean
+}
+
+export interface TeamSummaryView {
+  readonly teammates: number
+  readonly running: number
+  readonly pendingTasks: number
 }
 
 export interface PendingImageView {
@@ -139,20 +161,28 @@ interface QuestionRequestLike {
   readonly signal?: AbortSignal
 }
 
-interface ApprovalPending {
+interface InteractionPendingBase {
   readonly id: number
-  readonly request: ApprovalRequestLike
-  readonly resolve: (outcome: ApprovalOutcome) => void
+  readonly source: InteractionSourceView
+  readonly agent: Agent
   readonly removeAbort: () => void
 }
 
-interface QuestionsPending {
+interface ApprovalPending extends InteractionPendingBase {
+  readonly kind: 'approval'
+  readonly request: ApprovalRequestLike
+  readonly resolve: (outcome: ApprovalOutcome) => void
+}
+
+interface QuestionsPending extends InteractionPendingBase {
+  readonly kind: 'questions'
   readonly id: number
   readonly request: QuestionRequestLike
   readonly resolve: (answer: { answers: QuestionAnswerItem[] }) => void
   readonly reject: (error: Error) => void
-  readonly removeAbort: () => void
 }
+
+type InteractionPending = ApprovalPending | QuestionsPending
 
 interface ApprovalContext {
   on(name: 'approval/request', listener: (request: ApprovalRequestLike, next: () => Promise<ApprovalOutcome>) => Promise<ApprovalOutcome>): () => void
@@ -161,6 +191,10 @@ interface ApprovalContext {
     request: QuestionRequestLike,
     next: () => Promise<{ answers: QuestionAnswerItem[] }>,
   ) => Promise<{ answers: QuestionAnswerItem[] }>): () => void
+}
+
+interface AgentRegistryService {
+  list(): readonly Agent[]
 }
 
 interface CommandService {
@@ -250,6 +284,26 @@ export interface EffortChoice {
   readonly description?: string
   readonly current: boolean
 }
+
+export interface SpawnTeammateInput {
+  readonly name: string
+  readonly description: string
+  readonly prompt: string
+  readonly context?: 'fresh' | 'fork'
+}
+
+export interface CreateTeamTaskInput {
+  readonly subject: string
+  readonly description: string
+  readonly blockedBy?: readonly string[]
+  readonly writeScopes?: readonly string[]
+}
+
+export interface MemberTranscriptLease {
+  readonly store: TranscriptStore
+  readonly live: boolean
+  dispose(): void | Promise<void>
+}
 interface SubagentService {
   listDescendants(rootSessionId: ReturnType<typeof SessionId>, signal?: AbortSignal): Promise<Array<{
     kind: 'child' | 'diagnostic'; id: ReturnType<typeof SessionId>; parentId: ReturnType<typeof SessionId>; depth: number
@@ -273,11 +327,12 @@ const LOCAL_COMMANDS: readonly CommandChoice[] = [
   { name: 'model', description: 'Alias for /switch', source: 'tui', inputHint: '[provider/model]' },
   { name: 'always-approve', description: 'Select danger-full-access after explicit confirmation', source: 'tui' },
   { name: 'workflows', description: 'Summarize durable workflow runs', source: 'tui' },
+  { name: 'team', description: 'Open the Agent Teams control center', source: 'tui' },
   { name: 'mouse', description: 'Toggle wheel scrolling so the terminal can drag-select text', source: 'tui' },
   { name: 'image', description: 'Attach a clipboard or file image for the vision model', source: 'tui', inputHint: '[path | clear]' },
 ] as const
 
-export type LocalCommandAction = 'none' | 'quit' | 'help' | 'keys' | 'sessions' | 'models' | 'efforts' | 'session-info' | 'workflows' | 'confirm-danger' | 'confirm-new' | 'mouse'
+export type LocalCommandAction = 'none' | 'quit' | 'help' | 'keys' | 'sessions' | 'models' | 'efforts' | 'session-info' | 'workflows' | 'team' | 'confirm-danger' | 'confirm-new' | 'mouse'
 
 interface PendingImage {
   readonly attachment: ImageAttachmentRef
@@ -303,8 +358,9 @@ export class InteractionController {
   private attached: AttachedTranscript | undefined
   private projections: AttachedProjections | undefined
   private questionProviderDispose: (() => void) | undefined
-  private approval: ApprovalPending | undefined
-  private questions: QuestionsPending | undefined
+  private readonly eventDisposers: Array<() => void> = []
+  private interactions: InteractionPending[] = []
+  private interactionIndex = 0
   private readonly summaries = new Map<string, SessionSummary>()
   private requestSeq = 0
   private modelOperation = 0
@@ -322,6 +378,7 @@ export class InteractionController {
       sessionId: undefined, cwd: process.cwd(), model: `${selection.provider}/${selection.model}`, agentStatus: 'starting',
       reasoningEffort: selection.reasoningEffort === undefined ? undefined : String(selection.reasoningEffort),
       permission: undefined, projection: undefined, theme, notice: undefined, error: undefined, approval: undefined, questions: undefined,
+      interactionCount: 0, interactionIndex: 0, teamSummary: undefined,
       pendingImages: [], imageInput: false,
     }
   }
@@ -334,6 +391,12 @@ export class InteractionController {
 
   async start(resume?: string): Promise<void> {
     if (resume !== undefined && resume.trim() === '') throw new Error('resume session id must be non-empty')
+    const scoped = this.ctx as unknown as ApprovalContext
+    this.eventDisposers.push(
+      scoped.on('approval/request', (request, next) => this.askApproval(request, next)),
+      scoped.on('user-questions/request', (request, next) => this.routeQuestions(request, next)),
+      scoped.on('agent/status', ({ agent, status }) => this.handleAgentStatus(agent, status)),
+    )
     const questions = this.ctx.get('userQuestions') as QuestionService | undefined
     if (questions?.registerProvider !== undefined) {
       this.questionProviderDispose = questions.registerProvider({ ask: request => this.askQuestions(request) })
@@ -342,6 +405,7 @@ export class InteractionController {
       await this.open(resume)
       this.accepting = true
     } catch (error) {
+      for (const dispose of this.eventDisposers.splice(0)) dispose()
       this.questionProviderDispose?.()
       this.questionProviderDispose = undefined
       throw error
@@ -401,14 +465,6 @@ export class InteractionController {
     const setup = (agentCtx: Context, agent?: Agent): void => {
       scopedAgent = agent ?? (agentCtx as Context & { agent?: Agent }).agent
       installModelSelection(agentCtx, selected)
-      const scoped = agentCtx as unknown as ApprovalContext
-      scoped.on('approval/request', (request, next) => this.askApproval(request, next))
-      scoped.on('user-questions/request', (request, next) => (
-        request.agent === scopedAgent ? this.askQuestions(request) : next()
-      ))
-      scoped.on('agent/status', ({ agent, status }) => {
-        if (agent === this.handle?.agent || String(agent.id) === this.snapshot.sessionId) this.patch({ agentStatus: status })
-      })
     }
     let handle: AgentHandle
     let notice = resume === undefined ? 'New session ready' : `Resumed ${resume}`
@@ -461,6 +517,7 @@ export class InteractionController {
       permission: this.currentPermission(), notice, error: undefined,
       pendingImages: [], imageInput: this.imageInput,
     })
+    void this.refreshTeamSummary()
   }
 
   async switchSession(id?: string): Promise<void> {
@@ -715,6 +772,7 @@ export class InteractionController {
     if (name === 'workflows') {
       return 'workflows'
     }
+    if (name === 'team') return 'team'
     if (name === 'auto' || name === 'view-plan' || name === 'dashboard') return this.fail(`/${name} is not exposed by this TUI`)
     return this.fail(`Unknown local command: /${name}`)
   }
@@ -949,6 +1007,158 @@ export class InteractionController {
     }))
   }
 
+  private teamService(): TeamServiceLike {
+    const service = this.ctx.get('agentTeams') as TeamServiceLike | undefined
+    if (service === undefined) throw new Error('Agent Teams service is unavailable')
+    return service
+  }
+
+  private teamAgent(): Agent {
+    const agent = this.handle?.agent
+    if (agent === undefined) throw new Error('No active Team Lead session')
+    return agent
+  }
+
+  async teamView(): Promise<TeamViewSnapshot> {
+    const agent = this.teamAgent()
+    const service = this.teamService()
+    const members = service.listMembers(agent)
+    const tasks = service.listTasks(agent)
+    const activity = foldTeamActivity(sessionEventLikes(agent.session))
+    this.patch({ teamSummary: this.teamSummary(members, tasks) })
+    return { members, tasks, activity }
+  }
+
+  async spawnTeammate(input: SpawnTeammateInput, signal?: AbortSignal): Promise<TeamMemberView> {
+    const name = input.name.trim()
+    const description = input.description.trim()
+    const prompt = input.prompt.trim()
+    if (!TEAMMATE_NAME.test(name)) throw new Error('Teammate name must be unique lower-kebab-case')
+    if (description === '') throw new Error('Teammate description is required')
+    if (prompt === '') throw new Error('Teammate task is required')
+    const context = input.context ?? 'fresh'
+    const result = await this.teamService().spawnTeammate(this.teamAgent(), {
+      name, description, prompt: teammatePrompt(name, prompt), context,
+      provider: context === 'fork' ? 'fork' : 'spawn',
+      signal: signal ?? new AbortController().signal,
+    })
+    await this.refreshTeamSummary()
+    this.patch({ notice: `Teammate ${name} is ${result.member.status}`, error: undefined })
+    return result.member
+  }
+
+  async sendTeamMessage(target: string, message: string, signal?: AbortSignal): Promise<'accepted' | 'queued'> {
+    const normalized = message.trim()
+    if (normalized === '') throw new Error('Team message must be non-empty')
+    const result = await this.teamService().sendMessage(this.teamAgent(), {
+      target, content: [{ type: 'text', text: normalized }], signal: signal ?? new AbortController().signal,
+    })
+    this.patch({ notice: `Message to ${target}: ${result.status} · sent via Lead`, error: undefined })
+    return result.status
+  }
+
+  interruptTeammate(target: string): 'running' | 'idle' | 'inactive' {
+    const result = this.teamService().interrupt(this.teamAgent(), target)
+    this.patch({ notice: `Interrupted ${target} · was ${result.previousStatus}`, error: undefined })
+    void this.refreshTeamSummary()
+    return result.previousStatus
+  }
+
+  async createTeamTask(input: CreateTeamTaskInput): Promise<TeamTaskView> {
+    const subject = input.subject.trim()
+    const description = input.description.trim()
+    if (subject === '') throw new Error('Task subject is required')
+    if (description === '') throw new Error('Task description is required')
+    const task = await this.teamService().createTask(this.teamAgent(), {
+      subject,
+      description,
+      ...(input.blockedBy === undefined ? {} : { blockedBy: input.blockedBy.map(teamTaskId) }),
+      ...(input.writeScopes === undefined ? {} : { writeScopes: input.writeScopes.map(value => value.trim()).filter(Boolean) }),
+    })
+    await this.refreshTeamSummary()
+    this.patch({ notice: `Created ${String(task.id)} · revision ${task.revision}`, error: undefined })
+    return task
+  }
+
+  async updateTeamTask(input: UpdateTeamTaskRequest): Promise<TeamTaskView> {
+    const task = await this.teamService().updateTask(this.teamAgent(), input)
+    await this.refreshTeamSummary()
+    this.patch({ notice: `Updated ${String(task.id)} · revision ${task.revision}`, error: undefined })
+    return task
+  }
+
+  async watchTeam(listener: (view: TeamViewSnapshot) => void, signal: AbortSignal): Promise<void> {
+    const handle = this.handle
+    if (handle === undefined) throw new Error('No active Team Lead session')
+    const service = this.teamService()
+    listener(await this.teamView())
+    while (!signal.aborted && this.handle === handle) {
+      try {
+        await service.waitForChange(handle.agent, 30_000, signal)
+      } catch (error) {
+        if (signal.aborted || this.handle !== handle) return
+        throw error
+      }
+      if (signal.aborted || this.handle !== handle) return
+      listener(await this.teamView())
+    }
+  }
+
+  async openMemberTranscript(member: TeamMemberView, signal?: AbortSignal): Promise<MemberTranscriptLease> {
+    if (String(member.id) === this.snapshot.sessionId) {
+      return { store: this.transcript, live: true, dispose() {} }
+    }
+    const registry = this.ctx.get('agents') as (AgentRegistryService & object) | undefined
+    const live = registry?.list?.().find(agent => String(agent.session.id) === String(member.id))
+    if (live !== undefined) {
+      const attached = attachTranscript(live.ctx, live.session, new TranscriptStore(), live)
+      return { store: attached.store, live: true, dispose: () => attached.dispose() }
+    }
+
+    const persistence = this.ctx.get('sessionPersistence') as PersistenceService | undefined
+    if (persistence === undefined) throw new Error('Session persistence is unavailable')
+    const store = new TranscriptStore()
+    if (persistence.open !== undefined) {
+      const handle = await persistence.open(member.id, 'read', signal === undefined ? undefined : { signal })
+      try {
+        const stored = await handle.read(0, undefined, signal === undefined ? undefined : { signal })
+        store.replace(foldEvents(eventLikes(stored.events)))
+      } finally {
+        await handle.close()
+      }
+    } else {
+      const stored = persistence.readFrom !== undefined
+        ? await persistence.readFrom(member.id, 0, signal)
+        : await persistence.inspect?.(member.id, signal)
+      if (stored === undefined) throw new Error(`No persisted Session for ${member.name}`)
+      store.replace(foldEvents(eventLikes(stored.events as readonly SessionEvent[])))
+    }
+    return { store, live: false, dispose() {} }
+  }
+
+  private teamSummary(members: readonly TeamMemberView[], tasks: readonly TeamTaskView[]): TeamSummaryView | undefined {
+    const teammates = members.filter(member => member.role === 'teammate').length
+    if (teammates === 0) return undefined
+    return {
+      teammates,
+      running: members.filter(member => member.role === 'teammate' && (member.status === 'running' || member.status === 'provisioning')).length,
+      pendingTasks: tasks.filter(task => task.status === 'pending' || task.status === 'in_progress').length,
+    }
+  }
+
+  private async refreshTeamSummary(): Promise<void> {
+    const handle = this.handle
+    if (handle === undefined) return
+    try {
+      const service = this.teamService()
+      const members = service.listMembers(handle.agent)
+      const tasks = service.listTasks(handle.agent)
+      if (this.handle === handle) this.patch({ teamSummary: this.teamSummary(members, tasks) })
+    } catch {
+      if (this.handle === handle) this.patch({ teamSummary: undefined })
+    }
+  }
+
   permissionNames(): readonly string[] {
     // `auto` is a current-session review integration with danger-full-access +
     // never semantics. This TUI has no review surface, so it must not offer a
@@ -980,71 +1190,161 @@ export class InteractionController {
   }
 
   answerApproval(outcome: 'allowed-once' | 'rejected'): void {
-    const pending = this.approval
-    if (pending === undefined) return
-    this.approval = undefined
-    pending.removeAbort()
+    const pending = this.activeInteraction()
+    if (pending?.kind !== 'approval') return
+    this.removeInteraction(pending.id)
     pending.resolve(outcome)
-    this.patch({ approval: undefined, notice: outcome === 'allowed-once' ? 'Allowed once' : 'Rejected' })
+    this.patch({ notice: outcome === 'allowed-once' ? `Allowed once for ${pending.source.member}` : `Rejected for ${pending.source.member}` })
   }
 
   answerApprovalWithPreset(name: string): boolean {
-    if (this.approval === undefined || !this.selectPermission(name)) return false
+    const pending = this.activeInteraction()
+    if (pending?.kind !== 'approval' || !this.selectPermissionFor(pending.agent, name)) return false
     this.answerApproval('allowed-once')
     return true
   }
 
   answerQuestions(answers: QuestionAnswerItem[]): void {
-    const pending = this.questions
-    if (pending === undefined) return
-    this.questions = undefined
-    pending.removeAbort()
+    const pending = this.activeInteraction()
+    if (pending?.kind !== 'questions') return
+    this.removeInteraction(pending.id)
     pending.resolve({ answers })
-    this.patch({ questions: undefined, notice: 'Answers submitted' })
+    this.patch({ notice: `Answers submitted to ${pending.source.member}` })
+  }
+
+  selectInteraction(delta: number): void {
+    if (this.interactions.length < 2 || delta === 0) return
+    this.interactionIndex = (this.interactionIndex + delta + this.interactions.length) % this.interactions.length
+    this.syncInteractionSnapshot()
   }
 
   private askApproval(request: ApprovalRequestLike, next: () => Promise<ApprovalOutcome>): Promise<ApprovalOutcome> {
-    if (request.agent !== this.handle?.agent) return next()
+    const source = this.interactionSource(request.agent)
+    if (source === undefined) return next()
     if (request.signal?.aborted === true) return Promise.resolve('cancelled')
-    if (this.approval !== undefined) return Promise.resolve('unavailable')
+    if (this.interactions.length >= 32) return Promise.resolve('unavailable')
     const id = ++this.requestSeq
     return new Promise(resolve => {
       const abort = (): void => {
-        if (this.approval?.id !== id) return
-        this.approval = undefined
+        const pending = this.removeInteraction(id)
+        if (pending?.kind !== 'approval') return
         resolve('cancelled')
-        this.patch({ approval: undefined, notice: 'Approval request cancelled' })
+        this.patch({ notice: `Approval request cancelled for ${source.member}` })
       }
       request.signal?.addEventListener('abort', abort, { once: true })
-      this.approval = { id, request, resolve, removeAbort: () => request.signal?.removeEventListener('abort', abort) }
-      this.patch({ approval: { id, toolName: request.toolName, callId: request.callId === undefined ? undefined : String(request.callId), reason: request.reason } })
+      this.interactions = [...this.interactions, {
+        kind: 'approval', id, source, agent: request.agent, request, resolve,
+        removeAbort: () => request.signal?.removeEventListener('abort', abort),
+      }]
+      this.syncInteractionSnapshot()
     })
   }
 
   private askQuestions(request: QuestionRequestLike): Promise<{ answers: QuestionAnswerItem[] }> {
-    if (request.agent !== undefined && request.agent !== this.handle?.agent) return Promise.reject(new Error('Question caller is not the active root agent'))
+    const agent = request.agent ?? this.handle?.agent
+    const source = agent === undefined ? undefined : this.interactionSource(agent)
+    if (agent === undefined || source === undefined) return Promise.reject(new Error('Question caller is not in the active Team'))
     if (request.signal?.aborted === true) return Promise.reject(new Error('Question request cancelled'))
-    if (this.questions !== undefined) return Promise.reject(new Error('Another question request is already active'))
+    if (this.interactions.length >= 32) return Promise.reject(new Error('TUI interaction queue is full'))
     const id = ++this.requestSeq
     return new Promise((resolve, reject) => {
       const abort = (): void => {
-        if (this.questions?.id !== id) return
-        this.questions = undefined
+        const pending = this.removeInteraction(id)
+        if (pending?.kind !== 'questions') return
         reject(new Error('Question request cancelled'))
-        this.patch({ questions: undefined, notice: 'Question request cancelled' })
+        this.patch({ notice: `Question request cancelled for ${source.member}` })
       }
       request.signal?.addEventListener('abort', abort, { once: true })
-      this.questions = { id, request, resolve, reject, removeAbort: () => request.signal?.removeEventListener('abort', abort) }
-      this.patch({ questions: {
-        id,
-        questions: request.questions.map(question => ({
+      this.interactions = [...this.interactions, {
+        kind: 'questions', id, source, agent, request, resolve, reject,
+        removeAbort: () => request.signal?.removeEventListener('abort', abort),
+      }]
+      this.syncInteractionSnapshot()
+    })
+  }
+
+  private routeQuestions(
+    request: QuestionRequestLike,
+    next: () => Promise<{ answers: QuestionAnswerItem[] }>,
+  ): Promise<{ answers: QuestionAnswerItem[] }> {
+    return request.agent !== undefined && this.interactionSource(request.agent) === undefined
+      ? next()
+      : this.askQuestions(request)
+  }
+
+  private interactionSource(agent: Agent): InteractionSourceView | undefined {
+    const root = this.handle?.agent
+    if (root === undefined) return undefined
+    try {
+      const membership = this.teamService().tryMembership(agent)
+      if (membership === undefined || membership.root !== root) return undefined
+      return { member: membership.name, role: membership.role, sessionId: String(agent.session.id) }
+    } catch {
+      return agent === root ? { member: 'lead', role: 'lead', sessionId: String(agent.session.id) } : undefined
+    }
+  }
+
+  private handleAgentStatus(agent: Agent, status: 'idle' | 'running'): void {
+    if (agent === this.handle?.agent || String(agent.id) === this.snapshot.sessionId) this.patch({ agentStatus: status })
+    if (this.interactionSource(agent) !== undefined) void this.refreshTeamSummary()
+  }
+
+  private activeInteraction(): InteractionPending | undefined {
+    return this.interactions[this.interactionIndex]
+  }
+
+  private removeInteraction(id: number): InteractionPending | undefined {
+    const index = this.interactions.findIndex(item => item.id === id)
+    if (index < 0) return undefined
+    const pending = this.interactions[index]!
+    pending.removeAbort()
+    this.interactions = this.interactions.filter(item => item.id !== id)
+    if (index < this.interactionIndex) this.interactionIndex -= 1
+    this.interactionIndex = Math.max(0, Math.min(this.interactionIndex, this.interactions.length - 1))
+    this.syncInteractionSnapshot()
+    return pending
+  }
+
+  private syncInteractionSnapshot(): void {
+    const active = this.activeInteraction()
+    this.patch({
+      interactionCount: this.interactions.length,
+      interactionIndex: this.interactions.length === 0 ? 0 : this.interactionIndex,
+      approval: active?.kind === 'approval' ? {
+        id: active.id,
+        toolName: active.request.toolName,
+        callId: active.request.callId === undefined ? undefined : String(active.request.callId),
+        reason: active.request.reason,
+        source: active.source,
+      } : undefined,
+      questions: active?.kind === 'questions' ? {
+        id: active.id,
+        source: active.source,
+        questions: active.request.questions.map(question => ({
           id: question.id, question: question.question, options: question.options ?? [], multiSelect: question.multiSelect ?? false,
           detail: question.detail,
           header: question.header,
           approve: question.intent?.kind === 'plan-review' ? question.intent.approve : undefined,
         })),
-      } })
+      } : undefined,
     })
+  }
+
+  private selectPermissionFor(agent: Agent, name: string): boolean {
+    const permissions = this.ctx.get('permissionPresets') as PermissionService | undefined
+    if (permissions === undefined) { this.fail('Permission presets are unavailable'); return false }
+    try {
+      permissions.set(agent.session, name)
+      this.patch({
+        ...(agent === this.handle?.agent ? { permission: this.permissionCurrent(permissions, agent.session) } : {}),
+        notice: `Permission preset for ${this.interactionSource(agent)?.member ?? String(agent.id)}: ${name}`,
+        error: undefined,
+      })
+      return true
+    } catch (error) {
+      this.fail(error instanceof Error ? error.message : String(error))
+      return false
+    }
   }
 
   private currentPermission(): string | undefined {
@@ -1088,19 +1388,15 @@ export class InteractionController {
   }
 
   private settleBlocking(outcome: ApprovalOutcome): void {
-    if (this.approval !== undefined) {
-      const pending = this.approval
-      this.approval = undefined
+    const pendingItems = this.interactions
+    this.interactions = []
+    this.interactionIndex = 0
+    for (const pending of pendingItems) {
       pending.removeAbort()
-      pending.resolve(outcome)
+      if (pending.kind === 'approval') pending.resolve(outcome)
+      else pending.reject(new Error('TUI question request cancelled: session switched or TUI closed'))
     }
-    if (this.questions !== undefined) {
-      const pending = this.questions
-      this.questions = undefined
-      pending.removeAbort()
-      pending.reject(new Error('TUI interaction unavailable'))
-    }
-    this.patch({ approval: undefined, questions: undefined })
+    this.patch({ approval: undefined, questions: undefined, interactionCount: 0, interactionIndex: 0 })
   }
 
   private patch(change: Partial<RuntimeSnapshot>): void {
@@ -1119,6 +1415,7 @@ export class InteractionController {
     await Promise.resolve()
     this.questionProviderDispose?.()
     this.questionProviderDispose = undefined
+    for (const dispose of this.eventDisposers.splice(0)) dispose()
     await this.releaseHandle()
   }
 
@@ -1134,7 +1431,7 @@ export class InteractionController {
     this.projections?.dispose()
     this.projections = undefined
     this.transcript.replace(EMPTY_TRANSCRIPT)
-    this.patch({ projection: undefined })
+    this.patch({ projection: undefined, teamSummary: undefined })
     await Promise.resolve()
     await handle?.dispose()
     this.handle = undefined

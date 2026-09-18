@@ -6,7 +6,7 @@ Build from this repository, then let the existing `dsh` plugin manager compose t
 
 ```powershell
 Set-Location C:\absolute\path\to\dsh-tui-app
-dsh --version # Session V3 needs 0.1.6-alpha.1; this machine's daily launcher may still be older
+dsh --version # Session V3 + Agent Teams require 0.1.6-alpha.2
 npm install
 npm run build
 dsh plugin --profile tui add "C:\absolute\path\to\dsh-tui-app"
@@ -55,7 +55,8 @@ $env:NO_COLOR = '1'; dsh --profile tui
 
 - “profile tui does not exist”: run the `dsh plugin --profile tui add <absolute-path>` command above.
 - “interactive TTY is required”: launch directly inside Windows Terminal, not through redirected stdin/stdout.
-- Host version mismatch: this checkout targets `dsh-v0.1.6-alpha.1`. The installer does not replace the existing launcher; update Harness through its own supported workflow before relying on Session V3 behavior.
+- Host version mismatch: this checkout targets exact `dsh-v0.1.6-alpha.2`. Use the side-by-side gate below before switching the existing launcher.
+- “Agent Teams service is unavailable”: confirm `dsh --profile tui --dump-config` contains both `agent-team` and `tool-agent-team`, and that the four legacy subagent-control rows are disabled.
 - Missing status item: open `/session-info`. If the item is still absent, the corresponding host projection capability is not composed or has not reported a value; the TUI intentionally does not synthesize one.
 - Incorrect colors: force `--color 256`, `--color 16`, or `--color mono`. `NO_COLOR` wins over the flag.
 - Narrow layout: use at least 80×24 for the validated compact view or 120×40 for the full workbench and whale.
@@ -73,8 +74,8 @@ npm run test:ac:all
 AC-1 through AC-5 use isolated `DSH_HOME` directories under the repository. Generated acceptance artifacts are gitignored. To exercise Session V3 without replacing the daily launcher, install a prefix-local copy and prepend it for the gate:
 
 ```powershell
-npm install --global --prefix .\.alpha-host @deepseek-ai/dsh@0.1.6-alpha.1
-npm run test:gate:alpha
+npm install --global --prefix .\.alpha2-host @deepseek-ai/dsh@0.1.6-alpha.2
+npm run test:gate:alpha2
 ```
 
 ## Make bare `dsh` open this TUI
@@ -86,3 +87,13 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install-default-command.ps1
 ```
 
 It builds the project, installs the real `tui` profile, and adds an argument-aware branch to the resolved `dsh.cmd`: bare `dsh` becomes `dsh --profile tui`, while `dsh --help`, `dsh web`, `dsh plugin ...`, and every other explicit invocation retain upstream behavior. The original wrapper is saved beside it as `dsh.cmd.pre-dsh-tui`; restore that file to undo the default routing. Re-run the helper if a future launcher installation replaces the wrapper.
+
+Do this only after `test:gate:alpha2` passes. Keep the prior alpha.1 wrapper/Profile/credential backups until the new bare-command PTY check also passes.
+
+To restore the saved alpha.1 wrapper, Profile manifests, and credentials in one step:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\rollback-alpha1.ps1
+```
+
+The script reads Profile backups from `$HOME\.dsh\backups`; backups are kept outside `$HOME\.dsh\profiles` so Harness never mistakes them for runnable profiles.

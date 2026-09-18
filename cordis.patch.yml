@@ -4,7 +4,37 @@
 - id: hmr
   disabled: true
 
+# Agent Teams replaces direct continuable-subagent controls with the official
+# durable roster, mailbox, and shared task board. Workflow's fresh children and
+# the underlying providers remain available to the Team runtime.
+- id: tool-subagent-control
+  disabled: true
+
+- id: tool-subagent-list-agents
+  disabled: true
+
+- id: tool-subagent
+  disabled: true
+
+- id: tool-subagent-fork
+  disabled: true
+
 - insert:
+    - id: agent-team
+      name: '@deepseek-ai/dsh-experimental-agent-team'
+      config:
+        maxMembers: 8
+        maxTasks: 256
+        maxPendingMessagesPerMember: 64
+        maxMessageBytes: 65536
+        disposalTimeoutMs: 5000
+
+    - id: tool-agent-team
+      name: '@deepseek-ai/dsh-experimental-tool-agent-team'
+      config:
+        freshProvider: spawn
+        forkProvider: fork
+
     # Backfill image serialization only when the active DeepSeek adapter does
     # not already advertise native image input. Must mount after llm-deepseek.
     - id: llm-vision
