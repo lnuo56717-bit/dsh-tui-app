@@ -1,6 +1,6 @@
 # dsh-tui dependency and contract provenance
 
-Status: upgraded for Harness `dsh-v0.1.6-alpha.2`. Audit date: 2026-09-18.
+Status: dsh-tui `0.2.1`, upgraded for Harness `dsh-v0.1.6-alpha.2`. Audit date: 2026-09-19.
 
 ## 1. Version lock
 
@@ -19,11 +19,17 @@ The release tag, rather than moving `master`, is the build authority. The alpha 
 | `@deepseek-ai/dsh-agent` | `0.1.6-alpha.2` | `sha512-XEOytfXmJG6dyHld3Np0IYRrVPJnuoKKx2yQ+o74a7cN89k+J61c33D7zIcDG5rLkF7sMNM608ZkhfCWJuTcjg==` |
 | `@deepseek-ai/dsh-agent-default-model` | `0.1.6-alpha.2` | `sha512-7ITZJOfabWE5D3kKS3Q7nn+TGqTgza1LlLmvXw/wUnDpzAIUzcleFHsAm5Ab9BKfMdpZGfBg0qTIkyFfCA4cBA==` |
 | `@deepseek-ai/dsh-attachment` | `0.1.6-alpha.2` | `sha512-dv3s/FrFuZwmcBfWzWozj9khlb8LrFSCgz/spGsEg6l9zka1Wu3ZkHDcE+CRsM+fyCD/z/jTClMOkQ2DIMw5wQ==` |
+| `@deepseek-ai/dsh-browser-use` | `0.1.6-alpha.2` | `sha512-AAVowmKUiO6GgG+ghXiokCkCmkw9CV6rXjTCfTAJdgbWs7OyfoQhG045krzpR5Aa9/GPA/7rxGa6ClsDc0Klyw==` |
 | `@deepseek-ai/dsh-cmdline` | `0.1.6-alpha.2` | `sha512-ovm0trBqB9hzqxJNYolmap7H9Dh/fqwOo7oj8z25rpJTQx9piCiuUu9r9iPYoRb9dKRKgPRVPgrYRQMfbyMLig==` |
 | `@deepseek-ai/dsh-experimental-agent-team` | `0.1.6-alpha.2` | `sha512-V474u5Wk62g777o+89qbwzOxMTIwwoqTp2vmiSTBeSmY+NwTnKwVX0kgZoziu+6fATJ5DLMGv2JvNkx7ccmIRg==` |
+| `@deepseek-ai/dsh-experimental-browser-use-playwright-mcp` | `0.1.6-alpha.2` | `sha512-1pvPBbVxKxcvY/F4+7wQaTTnvq6SeNzFH/16kIo8Ick4qFj0t1R+cZqPDQt8ew9baRipfBVjjcH9gbKdZ+DwTQ==` |
+| `@deepseek-ai/dsh-experimental-browser-use-runtime` | `0.1.6-alpha.2` | `sha512-gnykv0IS3+ABQ4VrcXw8mbRQtHShQFv9ezqpJe8EAyKaziH7t4fvwKi5OJywPBjtg6PEe80Hd1TRg7k/qO+XnQ==` |
 | `@deepseek-ai/dsh-experimental-tool-agent-team` | `0.1.6-alpha.2` | `sha512-c3msoysF/Sq5/teFXAa9NUFcwCUjeTn+NUSX9yDtbeN+Uf8xPoC1BKt3gecsvPq9gSGurF8qvTxWSUmWcgxxPg==` |
 | `@deepseek-ai/dsh-llm` | `0.1.6-alpha.2` | `sha512-kIQoqnD6jN3Z2qQ+gd0TrIwkEDfUZAPC3kkTUUv2yQm1GeDjB7JULwT1vGAKTbEqOhOpVfKhdp4wItpG5PclfA==` |
 | `@deepseek-ai/dsh-session` | `0.1.6-alpha.2` | `sha512-WQNriZEQb0ykg+SDvqvNbp/AmG/DnydY5YdkTm5u3ST+PNXSQDLkaFzlY2YFU6hEuzs1h0yGCw6qPVpVGDAm1g==` |
+| `@deepseek-ai/dsh-tools` | `0.1.6-alpha.2` | `sha512-twRy/AffES124neGEpDLHjOTgcmWi8HtisTdTIm1b144LdEUBfU604A5N65muE+GfECDzyDKK/jJeLGuosMx2w==` |
+| `@deepseek-ai/dsh-user-approval` | `0.1.6-alpha.2` | `sha512-PMV8LOBoO3xwXpxDHBhh7PHHSqxHCn8YmzTMeGA2VNCSsL4e4KHLuVMUKyhpsny6KdP8Y2GjBHaKg2ZxLuEbnA==` |
+| `@playwright/mcp` | `0.0.80` | `sha512-FOPXHm2SvFhAQylm10jMZ35B/SR2TaMLVkavAlwoG4N2qCb5RqbvhQYcu3zmXNyxR2DW0Ooxe+9XPVt5UjKRCQ==` |
 
 The committed `package-lock.json` is the complete transitive lock. All resolved `@deepseek-ai/dsh-*` packages in that graph are from the `0.1.6-alpha.2` line.
 
@@ -51,6 +57,11 @@ The committed `package-lock.json` is the complete transitive lock. All resolved 
 | Team sessions | live members are exact Agents; inactive members persist as Sessions | live read-only transcript attaches to the member stream; inactive transcript is read through a `SessionHandle` opened with `read` access and then closed |
 | Team task scopes | normalized advisory path prefixes plus overlap warnings, never locks | warnings are shown verbatim and the UI always states that every member shares the same cwd |
 | Human interaction routing | approvals/questions remain Agent-scoped | a 32-item FIFO accepts the active Lead and rostered teammates only; cards identify source member/session and permission changes target that exact Session |
+| Browser provider | official Browser Use registry plus Session-owned Playwright MCP resources in `mode: launch`, `--isolated` | the provider is loaded from the active Host and must resolve the Host's exact `dsh-scope` module; a second physical copy fails closed instead of leaking tools across Agents |
+| Browser lifecycle | one MCP/Chromium resource per live Agent; state crosses turns but is not persisted | no custom state format; release, switch and cold restore dispose the official resource and start clean |
+| Browser tools | pinned upstream catalog is 24 tools in `@playwright/mcp@0.0.80` | 5 observation tools pass, 18 actions ask every time, unsafe code and unknown tools deny; sensitive input targets require manual takeover |
+| Browser approval audit | `tools/pre-execute` `ask` resolves through `approval/asked` + `approval/decided` inside the owning turn | a monotonic guard matches exact call/tool/id, tolerates interleaved FIFO decisions, and rechecks pause/sensitive/unknown policy before dispatch |
+| Browser screenshots | MCP image results use the Harness attachment pipeline | image-capable routes receive the attachment; the terminal shows its ordinary attachment label and never fabricates pixels |
 
 `src/harness-compat.ts` is deliberately the only production location that materializes a full live Session snapshot. Harness marks synchronous reads deprecated but has not yet published an asynchronous attached-consumer full-log replacement. Keeping the call isolated makes that future migration mechanical.
 
@@ -65,10 +76,10 @@ The decoder cannot write old rows and is not used for healthy v3 logs. A malform
 ## 5. Upgrade boundary
 
 - No file in `D:\deepseek-harness` is modified.
-- The source package never rewrites the global launcher by itself. For this release, the machine wrapper was switched to the isolated alpha.2 prefix only after every gate passed; `dsh.cmd.pre-0.1.6-alpha.2` and `scripts/rollback-alpha1.ps1` preserve the explicit rollback path.
+- The source package never rewrites the global launcher by itself. `scripts/install-browser-command.ps1` is an explicit post-gate action and first preserves the working 0.2.0 wrapper as `dsh.cmd.pre-0.2.0`; `scripts/rollback-0.2.0.ps1` restores it.
 - Full v3 streaming and Team behavior requires the exact `0.1.6-alpha.2` host. The compatibility bridge can render legacy durable chunks, but it cannot manufacture Team services on an older launcher.
-- Agent Teams is enabled with its official fixed delegation policy and shared-cwd semantics. Browser/computer use, remote workspaces, MCP resources/templates, and auto review remain disabled pending their own safety surfaces.
-- A side-by-side `.alpha2-host` is the release gate. The alpha.1 prefix plus wrapper, Profile-manifest and credential backups remain the rollback path after promotion.
+- Agent Teams remains enabled with its official fixed delegation policy and shared-cwd semantics. Browser Use is limited to visible isolated launch; attach, persistent browser state, Stagehand, Computer Use, desktop control, remote workspaces and auto review remain disabled.
+- A side-by-side `.browser-host` is copied from `.alpha2-host`, then receives only the pinned Browser Use dependencies with `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`. Runtime identity checks and the Browser PTY gate prove two-Agent isolation before promotion. The source alpha.2 and alpha.1 prefixes plus wrapper, Profile-manifest and credential backups remain rollback paths.
 
 ## 6. Chafa-generated DeepSeek whale
 

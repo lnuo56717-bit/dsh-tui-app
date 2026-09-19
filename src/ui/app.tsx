@@ -21,6 +21,7 @@ import { composerCaret } from './cursor.js'
 import { terminalSequences } from './terminal.js'
 import { focusableBlocks, ReasoningDetailView, TranscriptView, viewportWindow, type RowSelection, type TranscriptBlockRef } from './transcript-view.js'
 import { TeamCenter } from './team-center.js'
+import { BrowserCenter } from './browser-center.js'
 
 export interface ShellProps extends TuiStartupValues {
   store?: TranscriptStore
@@ -153,7 +154,7 @@ function Panel({ overlay, editor, controller, runtime, store, theme, plain, widt
     <Text><Text bold>Send</Text>  Enter prompt · Ctrl+M multiline · Alt+Enter send · Ctrl+L steer</Text>
     <Text><Text bold>Image</Text>  Ctrl+O clipboard · /image path · Backspace on empty prompt removes last</Text>
     <Text><Text bold>Edit</Text>  Ctrl+W word · Ctrl+U to start · Ctrl+K to end · ↑ history</Text>
-    <Text><Text bold>Open</Text>  Ctrl+P/? commands · Ctrl+S sessions · Ctrl+T Agent Teams · Ctrl+X keys</Text>
+    <Text><Text bold>Open</Text>  Ctrl+P/? commands · Ctrl+S sessions · Ctrl+T Agent Teams · Ctrl+B browser · Ctrl+X keys</Text>
     <Text><Text bold>Blocks</Text> Tab then ↑↓ select · ←/→ fold tool output and thoughts · Enter full</Text>
     <Text><Text bold>Copy</Text>  Ctrl+Y copies the selected block or mouse selection · release after a transcript drag also copies</Text>
     <Text><Text bold>Move</Text>  Tab focus · PgUp/PgDn page · Ctrl+U/D half page · wheel scrolls · Esc back/park</Text>
@@ -306,6 +307,7 @@ export function Shell(props: ShellProps): React.JSX.Element {
   const [scrollOffset, setScrollOffset] = useState(0)
   const [overlay, setOverlay] = useState<Overlay | undefined>()
   const [teamOpen, setTeamOpen] = useState(false)
+  const [browserOpen, setBrowserOpen] = useState(false)
   const [expandedBlocks, setExpandedBlocks] = useState<ReadonlySet<string>>(() => new Set())
   const [focusedBlockKey, setFocusedBlockKey] = useState<string | undefined>()
   const [reasoningDetail, setReasoningDetail] = useState<{ key: string; offset: number; follow: boolean } | undefined>()
@@ -410,6 +412,7 @@ export function Shell(props: ShellProps): React.JSX.Element {
 
   useEffect(() => {
     setTeamOpen(false)
+    setBrowserOpen(false)
     setExpandedBlocks(new Set())
     setFocusedBlockKey(undefined)
     setReasoningDetail(undefined)
@@ -660,7 +663,8 @@ export function Shell(props: ShellProps): React.JSX.Element {
       if (action === 'quit') exit()
       else if (action === 'mouse') toggleMouse()
       else if (action === 'workflows') openWorkflows()
-      else if (action === 'team') setTeamOpen(true)
+      else if (action === 'team') { setBrowserOpen(false); setTeamOpen(true) }
+      else if (action === 'browser') { setTeamOpen(false); setBrowserOpen(true) }
       else if (action === 'models') openModels()
       else if (action === 'efforts') openEfforts()
       else if (action === 'help' || action === 'keys' || action === 'session-info' || action === 'confirm-danger' || action === 'confirm-new') setOverlay({ kind: action })
@@ -812,7 +816,7 @@ export function Shell(props: ShellProps): React.JSX.Element {
 
   useInput((input, key) => {
     if (key.eventType === 'release') return
-    if (teamOpen && runtime.approval === undefined && runtime.questions === undefined) return
+    if ((teamOpen || browserOpen) && runtime.approval === undefined && runtime.questions === undefined) return
     const wheel = parseWheelBurst(input)
     if (wheel.notches !== 0) {
       // Over an open picker the wheel walks that list; otherwise it scrolls the transcript.
@@ -980,7 +984,8 @@ export function Shell(props: ShellProps): React.JSX.Element {
       return
     }
     if (key.ctrl && input === 'p' || input === '?' && editor.text === '') { setEditor({ ...EMPTY_EDITOR, text: '/', cursor: 1 }); setOverlay({ kind: 'commands', selected: 0 }); return }
-    if (key.ctrl && input === 't') { setTeamOpen(value => !value); return }
+    if (key.ctrl && input === 't') { setBrowserOpen(false); setTeamOpen(value => !value); return }
+    if (key.ctrl && input === 'b') { setTeamOpen(false); setBrowserOpen(value => !value); return }
     if (key.ctrl && input === 's') { openSessions(); return }
     if (key.ctrl && input === 'x') { setOverlay({ kind: 'keys' }); return }
     if (key.shift && key.tab) { controller?.cyclePermission(); return }
@@ -1162,11 +1167,15 @@ export function Shell(props: ShellProps): React.JSX.Element {
                 : stopArmed
                   ? 'Enter again to stop · Esc stops now'
                   : 'Esc stop · Enter sends · Enter again takes over'
-              : 'Enter send · Ctrl+T team · Ctrl+O image · Ctrl+P commands · Ctrl+Y copy last block'
+              : 'Enter send · Ctrl+T team · Ctrl+B browser · Ctrl+O image · Ctrl+P commands'
   const helpLine = middleEllipsis(quitArmed ? 'Ctrl+C again to quit' : compact ? help : `${help} · Ctrl+S sessions · Shift+Tab permissions`, Math.max(1, columns - margin * 2))
 
   if (teamOpen && controller !== undefined && runtime.approval === undefined && runtime.questions === undefined) {
     return <TeamCenter controller={controller} width={columns} height={rows} theme={theme} plain={veryNarrow} onClose={() => setTeamOpen(false)} />
+  }
+
+  if (browserOpen && controller !== undefined && runtime.approval === undefined && runtime.questions === undefined) {
+    return <BrowserCenter controller={controller} width={columns} height={rows} theme={theme} plain={veryNarrow} onClose={() => setBrowserOpen(false)} />
   }
 
   return (

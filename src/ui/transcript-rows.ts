@@ -4,6 +4,7 @@ import { markdownToLines, type SegmentTone } from './markdown.js'
 import { presentReasoning } from './reasoning-view.js'
 import { redactSecretValue } from './secrets.js'
 import { THINKING_REST_GLYPH } from './timing.js'
+import { browserToolDisplay } from '../browser-control.js'
 
 export type RowColor = 'text' | 'muted' | 'accent' | 'primary' | 'user' | 'success' | 'warning' | 'danger' | 'border'
 
@@ -222,7 +223,10 @@ function emitBlock(out: NodeRows, block: TranscriptBlock, width: number, indent:
   }
   if (block.type === 'tool-call') {
     if (block.id !== '' && toolIndex[block.id] !== undefined) return
-    out.push([...pad(indent), { text: `preparing ${block.name || 'tool'}  ${takeCells(block.arguments, Math.max(0, width - 18)).head}`, color: 'warning' }])
+    const browser = browserToolDisplay(block.name, block.arguments)
+    const name = (browser?.name ?? block.name) || 'tool'
+    const args = browser?.summary ?? block.arguments
+    out.push([...pad(indent), { text: `preparing ${name}  ${takeCells(args, Math.max(0, width - 18)).head}`, color: 'warning' }])
     return
   }
   if (block.type === 'image') {
@@ -292,12 +296,14 @@ function emitTool(out: NodeRows, node: ToolNode, width: number, options: BuildOp
   const shown = Math.min(rows.length, expanded ? TOOL_MAX_ROWS : preview)
   const hidden = rows.length - shown
   const size = hidden > 0 ? ` · ${rows.length} lines` : ''
-  const summary = argumentsSummary(node.arguments, width - displayWidth(node.name) - displayWidth(size) - 12)
+  const browser = browserToolDisplay(node.name, node.arguments)
+  const displayName = browser?.name ?? node.name
+  const summary = browser?.summary ?? argumentsSummary(node.arguments, width - displayWidth(displayName) - displayWidth(size) - 12)
   out.push([
     ...pad(indent),
     { text: `${branch} `, color: 'border' },
     { text: `${status.glyph} `, color: status.color },
-    { text: node.name, color: focused ? 'accent' : 'text', bold: true },
+    { text: displayName, color: focused ? 'accent' : 'text', bold: true },
     { text: `  ${summary}`, color: 'muted' },
     { text: size, color: 'accent' },
   ])

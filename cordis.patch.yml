@@ -20,6 +20,19 @@
   disabled: true
 
 - insert:
+    # Official alpha.2 Browser Use owns one isolated Playwright MCP process and
+    # Chromium state per live Session. The TUI companion only discovers the
+    # local executable and applies the approval/pause policy; it does not copy
+    # provider lifecycle or persistence.
+    - id: browser-use
+      name: '@deepseek-ai/dsh-browser-use'
+
+    - id: tui-browser-control
+      name: 'dsh-tui-app/browser-control'
+      config:
+        headless: false
+        toolCallTimeoutMs: 60000
+
     - id: agent-team
       name: '@deepseek-ai/dsh-experimental-agent-team'
       config:

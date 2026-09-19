@@ -1,6 +1,6 @@
 {
   "name": "dsh-tui-app",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Out-of-tree full-screen Ink app bundle for DeepSeek Harness",
   "private": true,
   "type": "module",
@@ -19,6 +19,10 @@
       "types": "./lib/types/llm-vision.d.ts",
       "default": "./lib/llm-vision.js"
     },
+    "./browser-control": {
+      "types": "./lib/types/browser-control.d.ts",
+      "default": "./lib/browser-control.js"
+    },
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
@@ -30,6 +34,10 @@
     "INSTALL.md",
     "PROVENANCE.md",
     "scripts/install-default-command.ps1",
+    "scripts/prepare-browser-host.ps1",
+    "scripts/install-browser-command.ps1",
+    "scripts/rollback-0.2.0.ps1",
+    "scripts/with-browser-host.ps1",
     "scripts/rollback-alpha1.ps1",
     "NOTICE",
     "LICENSE"
@@ -50,7 +58,9 @@
     "test:m3": "vitest run tests/m3",
     "test:m4": "vitest run tests/m4",
     "test:m6": "vitest run tests/m6",
+    "test:m7": "vitest run tests/m7",
     "test:team:pty": "node scripts/team-pty.mjs",
+    "test:browser:pty": "node scripts/browser-pty.mjs",
     "test:ac": "node scripts/ac1.mjs && node scripts/ac2.mjs",
     "test:ac:m2": "vitest run tests/m2 && node scripts/ac3.mjs",
     "test:ac:m3": "vitest run tests/m3 && node scripts/ac4.mjs && node scripts/ac5.mjs",
@@ -63,17 +73,24 @@
     "test:ac:alpha": "powershell -ExecutionPolicy Bypass -File ./scripts/with-alpha-host.ps1 npm run test:ac:all",
     "test:gate:alpha": "powershell -ExecutionPolicy Bypass -File ./scripts/with-alpha-host.ps1 npm run test:ac:all && powershell -ExecutionPolicy Bypass -File ./scripts/with-alpha-host.ps1 npm run test:timer && powershell -ExecutionPolicy Bypass -File ./scripts/with-alpha-host.ps1 npm run test:ask-user && node scripts/restore-flat-credentials.mjs",
     "test:ac:alpha2": "powershell -ExecutionPolicy Bypass -File ./scripts/with-alpha2-host.ps1 npm run test:ac:all",
-    "test:gate:alpha2": "powershell -ExecutionPolicy Bypass -File ./scripts/with-alpha2-host.ps1 npm run test:ac:all && powershell -ExecutionPolicy Bypass -File ./scripts/with-alpha2-host.ps1 npm run test:timer && powershell -ExecutionPolicy Bypass -File ./scripts/with-alpha2-host.ps1 npm run test:ask-user && powershell -ExecutionPolicy Bypass -File ./scripts/with-alpha2-host.ps1 npm run test:team:pty && node scripts/restore-flat-credentials.mjs --exact .pre-0.2.0"
+    "test:gate:alpha2": "powershell -ExecutionPolicy Bypass -File ./scripts/with-alpha2-host.ps1 npm run test:ac:all && powershell -ExecutionPolicy Bypass -File ./scripts/with-alpha2-host.ps1 npm run test:timer && powershell -ExecutionPolicy Bypass -File ./scripts/with-alpha2-host.ps1 npm run test:ask-user && powershell -ExecutionPolicy Bypass -File ./scripts/with-alpha2-host.ps1 npm run test:team:pty && node scripts/restore-flat-credentials.mjs --exact .pre-0.2.0",
+    "test:ac:browser": "powershell -ExecutionPolicy Bypass -File ./scripts/with-browser-host.ps1 npm run test:ac:all",
+    "test:gate:browser": "powershell -ExecutionPolicy Bypass -File ./scripts/with-browser-host.ps1 npm run test:ac:all && powershell -ExecutionPolicy Bypass -File ./scripts/with-browser-host.ps1 npm run test:timer && powershell -ExecutionPolicy Bypass -File ./scripts/with-browser-host.ps1 npm run test:ask-user && powershell -ExecutionPolicy Bypass -File ./scripts/with-browser-host.ps1 npm run test:team:pty && powershell -ExecutionPolicy Bypass -File ./scripts/with-browser-host.ps1 npm run test:browser:pty && node scripts/restore-flat-credentials.mjs --exact .pre-0.2.0"
   },
   "dependencies": {
     "@deepseek-ai/dsh-agent": "0.1.6-alpha.2",
     "@deepseek-ai/dsh-agent-default-model": "0.1.6-alpha.2",
     "@deepseek-ai/dsh-attachment": "0.1.6-alpha.2",
+    "@deepseek-ai/dsh-browser-use": "0.1.6-alpha.2",
     "@deepseek-ai/dsh-cmdline": "0.1.6-alpha.2",
     "@deepseek-ai/dsh-experimental-agent-team": "0.1.6-alpha.2",
+    "@deepseek-ai/dsh-experimental-browser-use-playwright-mcp": "0.1.6-alpha.2",
+    "@deepseek-ai/dsh-experimental-browser-use-runtime": "0.1.6-alpha.2",
     "@deepseek-ai/dsh-experimental-tool-agent-team": "0.1.6-alpha.2",
     "@deepseek-ai/dsh-llm": "0.1.6-alpha.2",
     "@deepseek-ai/dsh-session": "0.1.6-alpha.2",
+    "@deepseek-ai/dsh-tools": "0.1.6-alpha.2",
+    "@deepseek-ai/dsh-user-approval": "0.1.6-alpha.2",
     "commander": "15.0.0",
     "ink": "7.1.1",
     "marked": "18.0.7",

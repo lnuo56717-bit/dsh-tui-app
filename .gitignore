@@ -24,8 +24,12 @@ credentials.yaml
 .m5-results/
 .m6-home/
 .m6-results/
+.m7-home/
+.m7-results/
 .alpha-host/
 .alpha2-host/
+.browser-host/
+.playwright-mcp/
 assets/generated/
 *.tgz
 *.log

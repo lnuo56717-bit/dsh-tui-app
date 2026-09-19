@@ -24,6 +24,10 @@ import {
   type TeamActivityItem, type TeamMemberView, type TeamServiceLike, type TeamTaskView, type TeamViewSnapshot,
   type UpdateTeamTaskRequest,
 } from './team.js'
+import {
+  browserToolDisplay,
+  type BrowserActivityView, type BrowserAgentStateView, type BrowserControlService, type BrowserRuntimeView,
+} from './browser-control.js'
 
 export type ApprovalOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'
 
@@ -304,6 +308,20 @@ export interface MemberTranscriptLease {
   readonly live: boolean
   dispose(): void | Promise<void>
 }
+
+export interface BrowserActorView {
+  readonly sessionId: string
+  readonly name: string
+  readonly role: 'lead' | 'teammate'
+  readonly memberStatus: 'running' | 'idle' | 'inactive' | 'provisioning' | 'failed'
+  readonly control: 'enabled' | 'paused' | 'inactive' | 'unavailable'
+  readonly activeCalls: number
+  readonly activity: readonly BrowserActivityView[]
+}
+
+export interface BrowserViewSnapshot extends BrowserRuntimeView {
+  readonly actors: readonly BrowserActorView[]
+}
 interface SubagentService {
   listDescendants(rootSessionId: ReturnType<typeof SessionId>, signal?: AbortSignal): Promise<Array<{
     kind: 'child' | 'diagnostic'; id: ReturnType<typeof SessionId>; parentId: ReturnType<typeof SessionId>; depth: number
@@ -328,11 +346,12 @@ const LOCAL_COMMANDS: readonly CommandChoice[] = [
   { name: 'always-approve', description: 'Select danger-full-access after explicit confirmation', source: 'tui' },
   { name: 'workflows', description: 'Summarize durable workflow runs', source: 'tui' },
   { name: 'team', description: 'Open the Agent Teams control center', source: 'tui' },
+  { name: 'browser', description: 'Open isolated browser status and manual-takeover controls', source: 'tui' },
   { name: 'mouse', description: 'Toggle wheel scrolling so the terminal can drag-select text', source: 'tui' },
   { name: 'image', description: 'Attach a clipboard or file image for the vision model', source: 'tui', inputHint: '[path | clear]' },
 ] as const
 
-export type LocalCommandAction = 'none' | 'quit' | 'help' | 'keys' | 'sessions' | 'models' | 'efforts' | 'session-info' | 'workflows' | 'team' | 'confirm-danger' | 'confirm-new' | 'mouse'
+export type LocalCommandAction = 'none' | 'quit' | 'help' | 'keys' | 'sessions' | 'models' | 'efforts' | 'session-info' | 'workflows' | 'team' | 'browser' | 'confirm-danger' | 'confirm-new' | 'mouse'
 
 interface PendingImage {
   readonly attachment: ImageAttachmentRef
@@ -773,6 +792,7 @@ export class InteractionController {
       return 'workflows'
     }
     if (name === 'team') return 'team'
+    if (name === 'browser') return 'browser'
     if (name === 'auto' || name === 'view-plan' || name === 'dashboard') return this.fail(`/${name} is not exposed by this TUI`)
     return this.fail(`Unknown local command: /${name}`)
   }
@@ -1104,6 +1124,74 @@ export class InteractionController {
     }
   }
 
+  browserView(): BrowserViewSnapshot {
+    const service = this.ctx.get('tuiBrowserControl') as BrowserControlService | undefined
+    const fallback: BrowserRuntimeView = {
+      configured: false, available: false, provider: undefined, mode: 'launch', visible: true,
+      executablePath: undefined, unavailableReason: 'Browser control service is unavailable',
+    }
+    const runtime = service?.runtime() ?? fallback
+    const lead = this.handle?.agent
+    if (lead === undefined) return { ...runtime, actors: [] }
+
+    let members: readonly TeamMemberView[]
+    try {
+      members = this.teamService().listMembers(lead)
+    } catch {
+      members = [{
+        id: lead.session.id, name: 'lead', role: 'lead', status: lead.status,
+        diagnostics: [],
+      }]
+    }
+    if (!members.some(member => String(member.id) === String(lead.session.id))) {
+      members = [{ id: lead.session.id, name: 'lead', role: 'lead', status: lead.status, diagnostics: [] }, ...members]
+    }
+    const registry = this.ctx.get('agents') as AgentRegistryService | undefined
+    const liveAgents = registry?.list?.() ?? [lead]
+    const actors = members.map(member => {
+      const agent = String(member.id) === String(lead.session.id)
+        ? lead
+        : liveAgents.find(candidate => String(candidate.session.id) === String(member.id))
+      const state: BrowserAgentStateView = agent === undefined || service === undefined
+        ? { paused: false, activeCalls: 0, activity: [] }
+        : service.state(agent)
+      const control: BrowserActorView['control'] = !runtime.available
+        ? 'unavailable'
+        : agent === undefined
+          ? 'inactive'
+          : state.paused ? 'paused' : 'enabled'
+      return {
+        sessionId: String(member.id), name: member.name, role: member.role,
+        memberStatus: member.status, control, activeCalls: state.activeCalls, activity: state.activity,
+      }
+    })
+    return { ...runtime, actors }
+  }
+
+  setBrowserPaused(sessionId: string, paused: boolean): boolean {
+    const service = this.ctx.get('tuiBrowserControl') as BrowserControlService | undefined
+    const registry = this.ctx.get('agents') as AgentRegistryService | undefined
+    const lead = this.handle?.agent
+    const agent = lead !== undefined && String(lead.session.id) === sessionId
+      ? lead
+      : registry?.list?.().find(candidate => String(candidate.session.id) === sessionId)
+    if (service === undefined || agent === undefined) return this.failBoolean('That Team member has no live browser Session')
+    if (!service.runtime().available) return this.failBoolean(service.runtime().unavailableReason ?? 'Browser provider is unavailable')
+    service.setPaused(agent, paused)
+    this.patch({
+      notice: paused
+        ? 'Browser control paused · finish sensitive input in the visible browser, then resume here'
+        : 'Browser control resumed',
+      error: undefined,
+    })
+    return true
+  }
+
+  subscribeBrowser(listener: () => void): () => void {
+    const service = this.ctx.get('tuiBrowserControl') as BrowserControlService | undefined
+    return service?.subscribe(listener) ?? (() => undefined)
+  }
+
   async openMemberTranscript(member: TeamMemberView, signal?: AbortSignal): Promise<MemberTranscriptLease> {
     if (String(member.id) === this.snapshot.sessionId) {
       return { store: this.transcript, live: true, dispose() {} }
@@ -1312,7 +1400,7 @@ export class InteractionController {
       interactionIndex: this.interactions.length === 0 ? 0 : this.interactionIndex,
       approval: active?.kind === 'approval' ? {
         id: active.id,
-        toolName: active.request.toolName,
+        toolName: browserToolDisplay(active.request.toolName, '{}')?.name ?? active.request.toolName,
         callId: active.request.callId === undefined ? undefined : String(active.request.callId),
         reason: active.request.reason,
         source: active.source,
