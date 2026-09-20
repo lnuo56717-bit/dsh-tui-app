@@ -20,18 +20,14 @@
   disabled: true
 
 - insert:
-    # Official alpha.2 Browser Use owns one isolated Playwright MCP process and
-    # Chromium state per live Session. The TUI companion only discovers the
-    # local executable and applies the approval/pause policy; it does not copy
-    # provider lifecycle or persistence.
-    - id: browser-use
-      name: '@deepseek-ai/dsh-browser-use'
+    # Official alpha.2 computer-use registry retains exclusive ownership of the
+    # desktop provider. The Cua Driver MCP provider is mounted dynamically in
+    # the exact armed Agent scope, so idle Agents do not see its tool schemas.
+    - id: computer-use
+      name: '@deepseek-ai/dsh-computer-use'
 
-    - id: tui-browser-control
-      name: 'dsh-tui-app/browser-control'
-      config:
-        headless: false
-        toolCallTimeoutMs: 60000
+    - id: tui-computer-control
+      name: 'dsh-tui-app/computer-control'
 
     - id: agent-team
       name: '@deepseek-ai/dsh-experimental-agent-team'
@@ -66,7 +62,7 @@
 
     - id: tui-runner
       name: 'dsh-tui-app'
-      inject: [tuiStartup]
+      inject: [tuiStartup, tuiComputerControl]
       config:
         resume: !!js ctx.tuiStartup.resume
         theme: !!js ctx.tuiStartup.theme

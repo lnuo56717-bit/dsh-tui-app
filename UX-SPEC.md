@@ -1,6 +1,6 @@
 # dsh-tui UX Specification
 
-Status: original M0 interaction baseline plus the `dsh-v0.1.6-alpha.2` Agent Teams and safe Browser Use surfaces. The interaction reference is grok-build `eb267feff13129e568df38fb6fdf0ceb65f735d6`; current host seams and deviations are recorded in `PROVENANCE.md`.
+Status: original M0 interaction baseline plus the `dsh-v0.1.6-alpha.2` Agent Teams and Cua Driver `0.28.2` full-desktop surface. The interaction reference is grok-build `eb267feff13129e568df38fb6fdf0ceb65f735d6`; current host seams and deviations are recorded in `PROVENANCE.md`.
 
 ## 1. Design direction: Abyss Workbench
 
@@ -73,15 +73,16 @@ There is no permanent left sidebar. `Ctrl+S` opens a modal session picker and cl
 - The header always states the shared cwd and that write scopes are advisory. Official overlap warnings are visible; no wording implies worktrees, locks, confinement or automatic merge.
 - Opening the center starts one cancellable `waitForChange` loop. Closing it, switching the root Session or exiting cancels the watcher and releases every member transcript lease.
 
-### Browser Center
+### Computer Center
 
-`Ctrl+B` and `/browser` replace the conversation with a full-screen live status surface. Browser Center and Team Center are mutually exclusive. An approval or structured question temporarily takes keyboard focus in the conversation surface; when it settles, Browser Center returns without losing its selected Agent.
+`Ctrl+G` and `/computer` replace the conversation with a full-screen live status surface. `Ctrl+B` and `/browser` are compatibility aliases. Computer Center and Team Center are mutually exclusive.
 
-- Rows are exact live Agents: Lead or teammate name, role, short Session id, member status, enabled/paused state, active call count and recent actions. No row claims a current URL, tab inventory or process fact the official provider does not expose.
-- `Up`/`Down` selects an Agent; `p` or Enter pauses/resumes only that Agent; `PgUp`/`PgDn` scrolls its 64-item in-memory activity window; Esc returns to the conversation. Eight-member rosters scroll rather than hiding the selected row.
-- Manual login is explicit: pause the Agent, type secrets directly in the visible isolated Chrome window, then return and resume. The UI never asks the user to paste a password, token, OTP or card security code into a model prompt or tool form.
-- Pausing prevents calls that have not passed final dispatch. A navigation or click already delivered to Chrome cannot be undone; the panel states this and keeps the active-call count visible.
-- Browser state belongs only to the official live Session resource. Session switch, release or cold restore closes that state; the TUI persists no cookies, URL, activity or custom browser record.
+- Rows are exact live Agents: Lead or teammate name, role, short Session id, member status, lease phase, pause state, active call count and recent actions. No row claims tabs, foreground windows, processes or browser state not exposed by the official Provider.
+- `Up`/`Down` selects an Agent. `a` opens a high-risk confirmation that accepts only the exact case-sensitive phrase `AUTO`; the selected Agent alone receives one global desktop lease for its current or next model turn.
+- `p` pauses/resumes future calls. `x` immediately blocks new calls, cancels the owner turn and disposes the Provider without a second confirmation. `PgUp`/`PgDn` scrolls the 64-item live activity window; Esc returns to the conversation.
+- The arming card states that all 57 exact tools—including process kill, clipboard, recording/replay, install and persistent configuration—run without per-action TUI approval. It also states that persistent effects and OS actions already delivered cannot be undone.
+- A persistent footer warning names the armed Agent outside the Center. Five minutes without a next turn expires a pending lease. Turn end, cancellation, Session switch/release, exit and emergency stop remove the schemas and Provider.
+- Manual secrets remain manual: pause before typing a password, token, OTP or card security code. Never put them in prompts. The TUI does not grant attachment to an existing browser Profile.
 
 ## 3. Transcript visual grammar
 
@@ -90,7 +91,7 @@ There is no permanent left sidebar. `Ctrl+S` opens a modal session picker and cl
 - Reasoning is collapsed by default with a dim cyan label; expanding it never changes event order.
 - A streaming reasoning row shows a Grok-style truncated tail (latest summary plus the last three wrapped lines) and the shared width-1 spinner as its marker. A settled row returns to its stable first non-empty line and a static `◇`/`⌄`. Right opens a bounded three-line preview, Enter opens independently scrollable full detail, and `Ctrl+E` toggles every preview. Duration labels are omitted unless Harness emits real timestamps.
 - Tool calls are a tree. Running is cyan with the same spinner, success is foam/green, errors and rejections are coral, and raw/orphan data is amber. Tool names stay visible at every width.
-- Playwright MCP calls shorten to `browser/<action>`. Their presentation uses a lossy summary: typed/form/selected values, URL credentials and query strings, page-JavaScript source and directory portions of upload paths are never painted. Complete official results retain the normal folded tool-result treatment; screenshots appear as attachment labels, not terminal pixels.
+- Cua Driver MCP calls shorten to `computer/<action>`. Their presentation uses a lossy summary: typed and clipboard values, URL credentials and query strings, tokens and directory portions of paths are never painted. Canonical Session events remain unchanged; screenshots appear as attachment labels, not terminal pixels.
 - Tool output is preformatted, never re-flowed as Markdown prose: file content keeps its own line breaks and indentation. It folds to a six-line preview (one line at 80 columns and below) whose header states the real row count, so a large file read cannot bury the conversation. `→` expands, `←` collapses, `Ctrl+E` toggles every block, and an expanded body is capped so one pathological result cannot stall the row builder. Folding is view state: the copied text is always the tool's own output.
 - Diffs use `+`/`-` prefixes in addition to color. No meaning relies on color alone.
 - Unknown events render as `raw event #<seq> · <type>` with an expandable JSON body. They never appear as assistant prose.
@@ -109,7 +110,8 @@ The default is Grok's Simple-mode vocabulary; v1 does not implement Vim mode. Re
 | `Ctrl+P` or `?` | open fuzzy command palette | dsh command descriptors + local commands |
 | `Ctrl+S` | open persisted session picker | `sessionPersistence.list`, lazy `readFrom` per visible row, then `agents.resume` |
 | `Ctrl+T` | toggle full-screen Team Center | official `ctx.agentTeams`; the watcher is cancelled when the center closes |
-| `Ctrl+B` | toggle full-screen Browser Center | `tuiBrowserControl` over the official Session-owned Playwright MCP provider |
+| `Ctrl+G` | toggle full-screen Computer Center | `tuiComputerControl` over the dynamically scoped official Cua Driver MCP Provider |
+| `Ctrl+B` | compatibility alias for Computer Center | same action as `Ctrl+G` |
 | `Ctrl+X` | open key reference | local overlay; chosen because Windows Terminal does not reliably distinguish control punctuation |
 | `Ctrl+C` | cancel active turn; when idle with a draft, clear draft; when idle/empty, request quit on second press | `agent.cancel` or local state; double action is shown before execution |
 | `Ctrl+M` | prompt focused: toggle multiline; scrollback focused: live model picker | local composer / `llm` catalog + Agent `ModelSelectionRef` |
@@ -156,7 +158,7 @@ The default is Grok's Simple-mode vocabulary; v1 does not implement Vim mode. Re
 
 No “always allow this command” grant is shown because dsh exposes no equivalent persistent grant. Preset escalation is explicit and names its sandbox/approval consequence before confirmation.
 
-Browser approvals use the same FIFO and keys. Their title is `browser/<action>`; the reason names only the safe domain/action/element/character-count/file-count summary. Read-only console, find, request-list, accessibility snapshot and screenshot calls do not add a Browser-policy prompt. Navigation and every interaction/full-network-detail call do. Unsafe code, unknown future tools and sensitive input targets are denied without offering an override.
+CUA calls do not enter this approval card. Typing `AUTO` is the explicit one-turn product authorization: all 57 exact tools run automatically for the lease owner. Driver `standard` mode remains the runtime authorization boundary; catalog drift, wrong Agent, pending/paused/stopping state and unknown tools fail closed without an override.
 
 ### User-question card
 
@@ -199,7 +201,8 @@ Typing `/` opens a fuzzy menu combining `ctx.commands.list(agent)` with local TU
 | `/view-plan` | omit | dsh projection exposes active/pending state, not a durable Grok plan file; plan review remains in the real question card/transcript |
 | `/workflows` | P1 read-only | current workflow/jobs list only; no dashboard control invented |
 | `/team` | local | full-screen official Team roster, task board, activity and read-only member Sessions |
-| `/browser` | local | full-screen per-Agent browser activity, pause and visible manual-takeover controls |
+| `/computer` | local | full-screen lease, activity, pause and emergency-stop controls for CUA |
+| `/browser` | local alias | opens the same Computer Center; old Playwright Browser Center is not composed |
 | `/dashboard` | omit | multi-root dashboard is a v1 non-goal |
 
 Grok vocabulary sources: `04-slash-commands.md:11-173,269-325`; plan semantics examined at `19-plan-mode.md:40-145`; permissions examined at `22-permissions-and-safety.md:10-137,375-406,532-536`. Where those semantics exceed dsh, the table deliberately degrades or omits them.

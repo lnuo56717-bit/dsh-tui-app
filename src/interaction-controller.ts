@@ -25,9 +25,9 @@ import {
   type UpdateTeamTaskRequest,
 } from './team.js'
 import {
-  browserToolDisplay,
-  type BrowserActivityView, type BrowserAgentStateView, type BrowserControlService, type BrowserRuntimeView,
-} from './browser-control.js'
+  computerToolDisplay,
+  type ComputerActivityView, type ComputerAgentStateView, type ComputerControlService, type ComputerRuntimeView,
+} from './computer-control.js'
 
 export type ApprovalOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'
 
@@ -309,18 +309,23 @@ export interface MemberTranscriptLease {
   dispose(): void | Promise<void>
 }
 
-export interface BrowserActorView {
+export interface ComputerActorView {
   readonly sessionId: string
   readonly name: string
   readonly role: 'lead' | 'teammate'
   readonly memberStatus: 'running' | 'idle' | 'inactive' | 'provisioning' | 'failed'
-  readonly control: 'enabled' | 'paused' | 'inactive' | 'unavailable'
+  readonly phase: ComputerAgentStateView['phase'] | 'inactive' | 'unavailable'
+  readonly leaseOwner: boolean
+  readonly paused: boolean
   readonly activeCalls: number
-  readonly activity: readonly BrowserActivityView[]
+  readonly pendingExpiresAt: number | undefined
+  readonly boundTurn: number | undefined
+  readonly activity: readonly ComputerActivityView[]
 }
 
-export interface BrowserViewSnapshot extends BrowserRuntimeView {
-  readonly actors: readonly BrowserActorView[]
+export interface ComputerViewSnapshot extends ComputerRuntimeView {
+  readonly actors: readonly ComputerActorView[]
+  readonly ownerSessionId: string | undefined
 }
 interface SubagentService {
   listDescendants(rootSessionId: ReturnType<typeof SessionId>, signal?: AbortSignal): Promise<Array<{
@@ -346,12 +351,13 @@ const LOCAL_COMMANDS: readonly CommandChoice[] = [
   { name: 'always-approve', description: 'Select danger-full-access after explicit confirmation', source: 'tui' },
   { name: 'workflows', description: 'Summarize durable workflow runs', source: 'tui' },
   { name: 'team', description: 'Open the Agent Teams control center', source: 'tui' },
-  { name: 'browser', description: 'Open isolated browser status and manual-takeover controls', source: 'tui' },
+  { name: 'computer', description: 'Open full-desktop CUA controls', source: 'tui' },
+  { name: 'browser', description: 'Compatibility alias for /computer', source: 'tui' },
   { name: 'mouse', description: 'Toggle wheel scrolling so the terminal can drag-select text', source: 'tui' },
   { name: 'image', description: 'Attach a clipboard or file image for the vision model', source: 'tui', inputHint: '[path | clear]' },
 ] as const
 
-export type LocalCommandAction = 'none' | 'quit' | 'help' | 'keys' | 'sessions' | 'models' | 'efforts' | 'session-info' | 'workflows' | 'team' | 'browser' | 'confirm-danger' | 'confirm-new' | 'mouse'
+export type LocalCommandAction = 'none' | 'quit' | 'help' | 'keys' | 'sessions' | 'models' | 'efforts' | 'session-info' | 'workflows' | 'team' | 'computer' | 'confirm-danger' | 'confirm-new' | 'mouse'
 
 interface PendingImage {
   readonly attachment: ImageAttachmentRef
@@ -792,7 +798,7 @@ export class InteractionController {
       return 'workflows'
     }
     if (name === 'team') return 'team'
-    if (name === 'browser') return 'browser'
+    if (name === 'computer' || name === 'browser') return 'computer'
     if (name === 'auto' || name === 'view-plan' || name === 'dashboard') return this.fail(`/${name} is not exposed by this TUI`)
     return this.fail(`Unknown local command: /${name}`)
   }
@@ -1124,15 +1130,16 @@ export class InteractionController {
     }
   }
 
-  browserView(): BrowserViewSnapshot {
-    const service = this.ctx.get('tuiBrowserControl') as BrowserControlService | undefined
-    const fallback: BrowserRuntimeView = {
-      configured: false, available: false, provider: undefined, mode: 'launch', visible: true,
-      executablePath: undefined, unavailableReason: 'Browser control service is unavailable',
+  computerView(): ComputerViewSnapshot {
+    const service = this.ctx.get('tuiComputerControl') as ComputerControlService | undefined
+    const fallback: ComputerRuntimeView = {
+      configured: false, available: false, provider: undefined, permissionMode: 'standard', catalogSize: 57,
+      executablePath: undefined, driverVersion: undefined, unavailableReason: 'Computer control service is unavailable',
+      lastError: undefined,
     }
     const runtime = service?.runtime() ?? fallback
     const lead = this.handle?.agent
-    if (lead === undefined) return { ...runtime, actors: [] }
+    if (lead === undefined) return { ...runtime, actors: [], ownerSessionId: undefined }
 
     let members: readonly TeamMemberView[]
     try {
@@ -1152,44 +1159,74 @@ export class InteractionController {
       const agent = String(member.id) === String(lead.session.id)
         ? lead
         : liveAgents.find(candidate => String(candidate.session.id) === String(member.id))
-      const state: BrowserAgentStateView = agent === undefined || service === undefined
-        ? { paused: false, activeCalls: 0, activity: [] }
+      const state: ComputerAgentStateView = agent === undefined || service === undefined
+        ? { phase: 'idle', leaseOwner: false, paused: false, activeCalls: 0, pendingExpiresAt: undefined, boundTurn: undefined, activity: [] }
         : service.state(agent)
-      const control: BrowserActorView['control'] = !runtime.available
+      const phase: ComputerActorView['phase'] = !runtime.available
         ? 'unavailable'
         : agent === undefined
           ? 'inactive'
-          : state.paused ? 'paused' : 'enabled'
+          : state.phase
       return {
         sessionId: String(member.id), name: member.name, role: member.role,
-        memberStatus: member.status, control, activeCalls: state.activeCalls, activity: state.activity,
+        memberStatus: member.status, phase, leaseOwner: state.leaseOwner, paused: state.paused,
+        activeCalls: state.activeCalls, pendingExpiresAt: state.pendingExpiresAt, boundTurn: state.boundTurn, activity: state.activity,
       }
     })
-    return { ...runtime, actors }
+    return { ...runtime, actors, ownerSessionId: service?.owner() === undefined ? undefined : String(service.owner()!.session.id) }
   }
 
-  setBrowserPaused(sessionId: string, paused: boolean): boolean {
-    const service = this.ctx.get('tuiBrowserControl') as BrowserControlService | undefined
-    const registry = this.ctx.get('agents') as AgentRegistryService | undefined
-    const lead = this.handle?.agent
-    const agent = lead !== undefined && String(lead.session.id) === sessionId
-      ? lead
-      : registry?.list?.().find(candidate => String(candidate.session.id) === sessionId)
-    if (service === undefined || agent === undefined) return this.failBoolean('That Team member has no live browser Session')
-    if (!service.runtime().available) return this.failBoolean(service.runtime().unavailableReason ?? 'Browser provider is unavailable')
-    service.setPaused(agent, paused)
-    this.patch({
-      notice: paused
-        ? 'Browser control paused · finish sensitive input in the visible browser, then resume here'
-        : 'Browser control resumed',
-      error: undefined,
-    })
+  async armComputer(sessionId: string): Promise<boolean> {
+    const service = this.ctx.get('tuiComputerControl') as ComputerControlService | undefined
+    const agent = this.liveAgent(sessionId)
+    if (service === undefined || agent === undefined) return this.failBoolean('That Team member has no live Agent Session')
+    try {
+      await service.arm(agent)
+      this.patch({ notice: `CUA armed for ${this.computerActorName(sessionId)} · one model turn only`, error: undefined })
+      return true
+    } catch (error) {
+      return this.failBoolean(errorMessage(error))
+    }
+  }
+
+  async setComputerPaused(sessionId: string, paused: boolean): Promise<boolean> {
+    const service = this.ctx.get('tuiComputerControl') as ComputerControlService | undefined
+    const agent = this.liveAgent(sessionId)
+    if (service === undefined || agent === undefined) return this.failBoolean('That Team member has no live Agent Session')
+    try {
+      await service.setPaused(agent, paused)
+      this.patch({ notice: paused ? 'CUA paused · new calls are blocked' : 'CUA resumed', error: undefined })
+      return true
+    } catch (error) {
+      return this.failBoolean(errorMessage(error))
+    }
+  }
+
+  async stopComputer(sessionId: string): Promise<boolean> {
+    const service = this.ctx.get('tuiComputerControl') as ComputerControlService | undefined
+    const agent = this.liveAgent(sessionId)
+    if (service === undefined || agent === undefined) return this.failBoolean('That Team member has no live Agent Session')
+    if (service.owner() !== agent) return this.failBoolean('That Agent does not own the computer lease')
+    await service.stop(agent, 'Emergency stop from Computer Center', true)
+    this.patch({ notice: 'CUA emergency stop complete · delivered OS actions cannot be undone', error: undefined })
     return true
   }
 
-  subscribeBrowser(listener: () => void): () => void {
-    const service = this.ctx.get('tuiBrowserControl') as BrowserControlService | undefined
+  subscribeComputer(listener: () => void): () => void {
+    const service = this.ctx.get('tuiComputerControl') as ComputerControlService | undefined
     return service?.subscribe(listener) ?? (() => undefined)
+  }
+
+  private liveAgent(sessionId: string): Agent | undefined {
+    const registry = this.ctx.get('agents') as AgentRegistryService | undefined
+    const lead = this.handle?.agent
+    return lead !== undefined && String(lead.session.id) === sessionId
+      ? lead
+      : registry?.list?.().find(candidate => String(candidate.session.id) === sessionId)
+  }
+
+  private computerActorName(sessionId: string): string {
+    return this.computerView().actors.find(actor => actor.sessionId === sessionId)?.name ?? sessionId.slice(0, 8)
   }
 
   async openMemberTranscript(member: TeamMemberView, signal?: AbortSignal): Promise<MemberTranscriptLease> {
@@ -1400,7 +1437,7 @@ export class InteractionController {
       interactionIndex: this.interactions.length === 0 ? 0 : this.interactionIndex,
       approval: active?.kind === 'approval' ? {
         id: active.id,
-        toolName: browserToolDisplay(active.request.toolName, '{}')?.name ?? active.request.toolName,
+        toolName: computerToolDisplay(active.request.toolName, '{}')?.name ?? active.request.toolName,
         callId: active.request.callId === undefined ? undefined : String(active.request.callId),
         reason: active.request.reason,
         source: active.source,

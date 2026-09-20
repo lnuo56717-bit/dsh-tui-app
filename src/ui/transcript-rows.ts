@@ -4,7 +4,7 @@ import { markdownToLines, type SegmentTone } from './markdown.js'
 import { presentReasoning } from './reasoning-view.js'
 import { redactSecretValue } from './secrets.js'
 import { THINKING_REST_GLYPH } from './timing.js'
-import { browserToolDisplay } from '../browser-control.js'
+import { computerResultValue, computerToolDisplay } from '../computer-control.js'
 
 export type RowColor = 'text' | 'muted' | 'accent' | 'primary' | 'user' | 'success' | 'warning' | 'danger' | 'border'
 
@@ -223,9 +223,9 @@ function emitBlock(out: NodeRows, block: TranscriptBlock, width: number, indent:
   }
   if (block.type === 'tool-call') {
     if (block.id !== '' && toolIndex[block.id] !== undefined) return
-    const browser = browserToolDisplay(block.name, block.arguments)
-    const name = (browser?.name ?? block.name) || 'tool'
-    const args = browser?.summary ?? block.arguments
+    const computer = computerToolDisplay(block.name, block.arguments)
+    const name = (computer?.name ?? block.name) || 'tool'
+    const args = computer?.summary ?? block.arguments
     out.push([...pad(indent), { text: `preparing ${name}  ${takeCells(args, Math.max(0, width - 18)).head}`, color: 'warning' }])
     return
   }
@@ -284,11 +284,19 @@ function emitTool(out: NodeRows, node: ToolNode, width: number, options: BuildOp
 
   // Render the body first: its real row count decides the header's size hint.
   const body = new NodeRows()
-  const diff = findDiff(node.meta) ?? findDiff(node.result)
+  const computer = computerToolDisplay(node.name, node.arguments)
+  const safeResult = computer === undefined ? node.result : node.result.map(block => {
+    if (block.type === 'text') return { ...block, text: String(computerResultValue(node.name, block.text)) }
+    if (block.type === 'raw') return { ...block, value: computerResultValue(node.name, block.value) }
+    if (block.type === 'image') return { ...block, label: String(computerResultValue(node.name, block.label)) }
+    return block
+  })
+  const safeMeta = computer === undefined ? node.meta : computerResultValue(node.name, node.meta)
+  const diff = findDiff(safeMeta) ?? findDiff(safeResult)
   if (diff !== undefined) emitDiff(body, diff, Math.max(8, width - 4), indent + 4)
-  else for (const block of node.result) emitBlock(body, block, Math.max(8, width - 4), indent + 4, {}, undefined, true)
-  if (node.meta !== undefined && diff === undefined) {
-    body.push([...pad(indent), { text: `    raw metadata  ${takeCells(safeJson(node.meta), Math.max(0, width - 18)).head}`, color: 'muted' }])
+  else for (const block of safeResult) emitBlock(body, block, Math.max(8, width - 4), indent + 4, {}, undefined, true)
+  if (safeMeta !== undefined && diff === undefined) {
+    body.push([...pad(indent), { text: `    raw metadata  ${takeCells(safeJson(safeMeta), Math.max(0, width - 18)).head}`, color: 'muted' }])
   }
   const rows = body.take()
   // A narrow terminal keeps tools at one line until the reader opens one.
@@ -296,9 +304,8 @@ function emitTool(out: NodeRows, node: ToolNode, width: number, options: BuildOp
   const shown = Math.min(rows.length, expanded ? TOOL_MAX_ROWS : preview)
   const hidden = rows.length - shown
   const size = hidden > 0 ? ` · ${rows.length} lines` : ''
-  const browser = browserToolDisplay(node.name, node.arguments)
-  const displayName = browser?.name ?? node.name
-  const summary = browser?.summary ?? argumentsSummary(node.arguments, width - displayWidth(displayName) - displayWidth(size) - 12)
+  const displayName = computer?.name ?? node.name
+  const summary = computer?.summary ?? argumentsSummary(node.arguments, width - displayWidth(displayName) - displayWidth(size) - 12)
   out.push([
     ...pad(indent),
     { text: `${branch} `, color: 'border' },

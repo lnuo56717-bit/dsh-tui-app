@@ -2,15 +2,17 @@
 
 A full-screen terminal interface (TUI) for DeepSeek Harness (`dsh`), built as an independent, out-of-tree plugin. It runs in the same process as the `dsh` host, combines the durable Session V3 log with the process-local assistant stream, and uses host projections only for auxiliary status facts. The Chafa-generated DeepSeek whale is its one visual signature.
 
-## 0.2.1 — Safe Browser Control
+## 0.2.2 — CUA Full-Desktop Control
 
 This branch targets the immutable official prerelease `dsh-v0.1.6-alpha.2` (`ddefc45fbc7f8e46dd73185e68295696d1297887`), not moving `master`.
 
-- The official Browser Use domain and Playwright MCP provider run in fixed `launch` mode with visible, isolated system Chrome. Every live Lead or teammate owns a separate browser process and loses that state when its live Session is released or restored.
-- `Ctrl+B` or `/browser` opens a full-screen Browser Center. It reports exact live Agents, active calls and recent actions; `p`/Enter pauses one Agent for manual login and resumes it without ever placing credentials in tool parameters.
-- Five observation tools run directly. Eighteen navigation/interaction/full-network-detail tools ask every time. `browser_run_code_unsafe`, unclassified future tools, and credential-like type/form targets fail closed.
-- Approval cards use short `browser/<action>` names and lossy summaries: typed values, URL credentials/query strings and full upload paths are not displayed. The monotonic guard requires the matching `approval/asked` + `approval/decided` audit pair and rechecks pause state immediately before dispatch.
-- Browser lifecycle, Session isolation, screenshot attachments and cleanup remain owned by the official alpha.2 Browser Use runtime. The TUI adds no cookies/profile persistence, Chrome attach, Stagehand, Computer Use or desktop control.
+- The official `dsh-computer-use` registry and Cua Driver MCP provider replace the 0.2.1 Playwright Browser Use stack. Harness remains locked to `0.1.6-alpha.2`; Cua Driver is locked to `0.28.2` in immutable `standard` mode.
+- `Ctrl+G` or `/computer` opens Computer Center. `Ctrl+B` and `/browser` are compatibility aliases for the same screen; the old Browser Center is not loaded.
+- The user must select one live Lead/teammate and type the exact case-sensitive phrase `AUTO`. That Agent alone receives the 57-tool 0.28.2 MCP catalog for one model turn. Idle and other Agents pay no schema/context cost.
+- One global desktop lease exists. `p` pauses/resumes new calls; `x` is an immediate emergency stop that blocks new calls, cancels the owner turn and tears down the Provider. A delivered OS action cannot be rolled back.
+- All 57 pinned tools run without per-action TUI approval during the armed turn. Any missing, added or renamed tool, driver-version drift, wrong Agent, expired/pending/paused lease or unknown future tool fails closed.
+- Tool cards use `computer/<action>` names and lossy summaries. Typed/clipboard content, URL credentials and queries, tokens and complete paths are not painted. Canonical Harness Session events remain unchanged.
+- Cua Driver owns desktop/browser behavior. The TUI never selects `unrestricted`, never passes `--dangerously-bypass-approvals`, never grants existing-profile attachment, and never calls `revoke --all`.
 - The official Team domain and nine official model tools continue to load by default. The fixed upstream policy creates teammates only after an explicit user request; the TUI creates one only from the Team Center's own form.
 - `Ctrl+T` or `/team` opens the full-screen Team Center: Roster, shared Tasks and ordered Activity. Roster controls create fresh/fork teammates, send Lead-authored messages, interrupt a current turn, and open complete read-only live or persisted member transcripts.
 - The task board supports create, claim, release, edit, dependency changes, complete, reopen, reassign and delete. Every mutation carries the revision shown on screen; a conflict refreshes and requires a new confirmation instead of overwriting.
@@ -19,9 +21,11 @@ This branch targets the immutable official prerelease `dsh-v0.1.6-alpha.2` (`dde
 - Approvals and structured questions now share a bounded 32-item FIFO across the Lead and current teammates. Cards show member, role and Session id; `Tab`/`Shift+Tab` selects a request, and permission changes apply only to that request's Session.
 - The prior Session V3, Agent Teams, real live/final TPS, model/effort switching, Grok-style reasoning, image, PTC, IME and terminal-safety behavior remains intact.
 
-Release verification completed on 2026-09-19: `check`, 45 Vitest files / 180 tests, build, project audit (0 vulnerabilities), the complete legacy AC suite, bare-`dsh` launch PTY, live timer, structured questions, real Team PTY, and real Browser PTY all passed. Browser PTY covered the exact 24-tool catalog, approval/pause guard, rejection and allowance, sensitive-input/RCE denial, screenshot attachment, two-Agent isolation, same-Session cold restore and process cleanup. Every PTY gate reported `D:\deepseek-harness` unchanged and restored the terminal; release cleanup restored the exact pre-0.2.0 credential backup.
+The real Computer PTY gate covers the exact 57-tool catalog, `standard` mode, typed `AUTO`, pause guard, zero CUA approval prompts, Lead/teammate isolation, WinForms Accessibility/screenshot/value/click/result verification, one-turn teardown, sensitive display redaction and child-process cleanup. On this workstation 0.28.2 correctly refuses isolated Chromium launch because the current token can delete a trusted `Program Files` root; existing-profile attachment is independently refused because no grant or authorization host is present. The gate records these as explicit safe refusals instead of weakening the driver.
 
-The gate used `.browser-host`, copied from the existing `.alpha2-host`, without modifying `.alpha2-host`, `.alpha-host` or the upstream checkout. Promotion keeps the complete 0.2.0 launcher as `dsh.cmd.pre-0.2.0`; older alpha.1 wrapper, Profile manifests and credential backups remain available too. Detailed hashes and seam decisions are in [PROVENANCE.md](PROVENANCE.md).
+Release verification on 2026-09-20 passed TypeScript check, all 45 test files / 180 tests, production build, npm audit with zero vulnerabilities, the complete legacy/Team/Computer gate, and the bare-`dsh` PTY check. The test harness also confirmed that the scoped `D:\deepseek-harness` snapshot was unchanged.
+
+The gate uses `.computer-host`, copied from the existing `.alpha2-host`, without modifying `.alpha2-host`, `.browser-host`, `.alpha-host` or the upstream checkout. Promotion preserves the complete 0.2.1 launcher as `dsh.cmd.pre-0.2.1`; older wrappers, Profile manifests and credential backups remain available too. Detailed hashes and seam decisions are in [PROVENANCE.md](PROVENANCE.md).
 
 <p align="center">
   <img src="assets/screenshots/empty-session.png" alt="An empty dsh-tui session with the Chafa-generated DeepSeek whale" width="720">
@@ -41,7 +45,7 @@ The gate used `.browser-host`, copied from the existing `.alpha2-host`, without 
 - **Reasoning disclosure** — Grok-style views over real dsh reasoning events: a width-1 spinner on the live thought, live tail, stable settled summary, bounded preview, and an independently scrollable detail view.
 - **Native structured questions** — an agent-scoped `user-questions/request` answerer lets a loaded `@deepseek-ai/dsh-tool-ask-user` block until the QuestionCard returns a real keyboard answer. The unified FIFO accepts only the current Team Lead and rostered teammates; ordinary workflow children and unrelated Sessions stay downstream. See [Enabling ask_user_question](#enabling-ask_user_question).
 - **Agent Teams control** — the exact alpha.2 TeamService owns roster, mailbox, recovery and task CAS. `Ctrl+T`/`/team` exposes all released controls without copying its state machine or persistence.
-- **Safe browser control** — the exact alpha.2 Browser Use runtime owns a visible isolated Chrome + Playwright MCP connection per live Agent. `Ctrl+B`/`/browser` exposes pause/manual-takeover state and activity; the pinned 24-tool policy is fail-closed and every mutating action is approval-gated.
+- **Armed CUA control** — `Ctrl+G`/`/computer` (plus the `Ctrl+B`/`/browser` aliases) exposes a single-Agent, single-turn lease over the official Cua Driver MCP Provider. Exact version/catalog checks fail closed; `AUTO`, pause and emergency stop remain explicit.
 - **Session picker** — `/resume` (and `Ctrl+S`) lists persisted conversations by their durable title (or opening prompt), prompt count, and age, with a current-session marker.
 - **Task and conversation timing** — while a turn runs, the header chip counts its elapsed seconds from the same live clock that steps the thinking spinner; when the turn closes, the chip states that turn's span and the conversation's accumulated task time. Both come from the log's own `turn/start`/`turn/end` timestamps, so a resumed session restates a real total, and a turn Harness never timestamped is not counted rather than estimated.
 - **Live token throughput** — while the model is streaming, the header shows `⚡ 27.5 tok/s` and refreshes it from the same 80 ms live clock. The count comes from Harness's real `agent/assistant-stream` token-boundary frames—not character length. The temporary display never consumes a durable Session sequence number; the committed V3 stream and provider usage establish the final average, which remains visible while idle.
@@ -54,42 +58,43 @@ The gate used `.browser-host`, copied from the existing `.alpha2-host`, without 
 - DeepSeek Harness `dsh-v0.1.6-alpha.2` for the full Session V3/live-stream and Agent Teams contract. Installation does not patch the Harness source checkout.
 - Node.js 22 or newer (Node.js 24 is used in CI)
 - npm and pnpm for the `dsh plugin` workflow
-- Installed Google Chrome, or compatible Edge/Chromium. The release scripts set `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` and do not download Chromium.
+- Cua Driver `0.28.2`, installed through its pinned, hash-verified official installer. The old `0.17.0` release remains cached for rollback.
+- A vendor-signed Chrome or Edge tree that the current token cannot modify is required only for CUA's isolated-browser tools. Desktop Accessibility and screenshots remain available when Cua Driver safely refuses browser launch.
 - Windows Terminal on Windows; modern xterm-compatible terminals are best effort elsewhere
 
 ## Installation
 
 ```powershell
-$env:PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = '1'
 npm install
-powershell -ExecutionPolicy Bypass -File .\scripts\prepare-browser-host.ps1
-powershell -ExecutionPolicy Bypass -File .\scripts\with-browser-host.ps1 dsh --profile tui --help
+powershell -ExecutionPolicy Bypass -File .\scripts\prepare-cua-driver.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\prepare-computer-host.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\with-computer-host.ps1 dsh --profile tui-computer --help
 ```
 
-`prepare-browser-host.ps1` copies the existing `.alpha2-host`, adds only the exact Browser Use packages beside that Host, builds this project, and installs the profile. Keeping the official provider beside the active Harness is a security requirement: `dsh-scope` uses process-local identity, and the TUI refuses to start browser support if Provider and Host resolve different physical copies. It never downloads another dsh or Chromium.
+`prepare-computer-host.ps1` copies the existing `.alpha2-host`, adds only the exact Computer Use packages beside that Host, builds this project, and installs the separate `tui-computer` profile. Keeping the official Provider beside the active Harness is a security requirement: the TUI refuses scoped registration when Provider and Host resolve different physical `dsh-scope`/`dsh-tools` modules. It never downloads another dsh.
 
 To make a bare `dsh` command open this TUI:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\install-browser-command.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\install-computer-command.ps1
 dsh
 ```
 
-Explicit commands such as `dsh --help`, `dsh web`, and `dsh plugin ...` remain routed to the upstream CLI. The plugin creates or updates the isolated `tui` profile with `@deepseek-ai/dsh-base` followed by `dsh-tui-app`; it does not edit the Harness checkout.
+Explicit commands such as `dsh --help`, `dsh web`, and `dsh plugin ...` remain routed to the upstream CLI. The plugin creates or updates the isolated `tui-computer` profile with `@deepseek-ai/dsh-base` followed by `dsh-tui-app`; it does not edit the Harness checkout.
 
 This repository pins an alpha Harness release deliberately. Verify `dsh --version` before installing the profile. An older host can still render its durable `assistant/chunk` events through the compatibility fold, but it cannot provide V3-only live-stream, migration, or service behavior.
 
 Resume a durable session:
 
 ```powershell
-dsh --profile tui --resume <session-id>
+dsh --profile tui-computer --resume <session-id>
 ```
 
 ### Enabling `ask_user_question`
 
 The app provides the question UI, but no dsh bundle loads the tool that lets the
 model ask. Add it once to the profile's own patch layer
-(`$DSH_HOME/profiles/tui/cordis.patch.yml`) and restart:
+(`$DSH_HOME/profiles/tui-computer/cordis.patch.yml`) and restart:
 
 ```yaml
 - insert:
@@ -97,7 +102,7 @@ model ask. Add it once to the profile's own patch layer
       name: '@deepseek-ai/dsh-tool-ask-user'
 ```
 
-Confirm the composed tree with `dsh --profile tui --dump-config`, and the whole
+Confirm the composed tree with `dsh --profile tui-computer --dump-config`, and the whole
 path — registration, the card, the returned answer — with `npm run test:ask-user`,
 which boots the real profile behind a read-only `--patch` overlay.
 
@@ -118,7 +123,7 @@ without a provider (for example the `grok` TUI) fails every call with
 
 ## Slash commands
 
-`/browser`, `/team`, `/switch [provider/model]`, `/effort [default|level]`, `/model` (a `/switch` alias), `/new`, `/resume`, `/session-info`, `/rename`, `/theme`, `/workflows`, `/mouse`, `/keys`, `/help`, `/quit`.
+`/computer`, `/browser` (alias), `/team`, `/switch [provider/model]`, `/effort [default|level]`, `/model` (a `/switch` alias), `/new`, `/resume`, `/session-info`, `/rename`, `/theme`, `/workflows`, `/mouse`, `/keys`, `/help`, `/quit`.
 
 Commands advertised by dsh execute through the host command registry; exact-name collisions remain visibly separate as `[dsh]` and `[tui]` entries.
 
@@ -135,7 +140,8 @@ Commands advertised by dsh execute through the host command registry; exact-name
 | `Ctrl+P` or `?` | open fuzzy dsh + local command palette |
 | `Ctrl+S` | open persisted session picker |
 | `Ctrl+T` | open or close the full-screen Agent Teams control center |
-| `Ctrl+B` | open or close Browser Center; Team Center closes if open |
+| `Ctrl+G` | open or close Computer Center; Team Center closes if open |
+| `Ctrl+B` | compatibility alias for Computer Center |
 | `Ctrl+X` | open the complete in-app key page |
 | `Ctrl+Y` | copy the selected block, the composer's mouse selection, or the newest block, to the clipboard |
 | `Ctrl+E` | expand/collapse every tool output and reasoning preview |
@@ -168,14 +174,14 @@ Approvals use `y`/`1` (allow once), `n`/`2` (reject), or `3` (change the request
 | Copying output | `Ctrl+Y` per block, `Shift`+drag, `/mouse` off | Browser selection |
 | Approvals and structured user questions | Keyboard-first, fail-closed | Browser controls |
 | Agent Teams | Full roster, task board, activity, messages, interrupt and read-only member Sessions | Browser team surfaces |
-| Browser control | Visible isolated Chrome per live Agent, manual takeover pause, approval-gated actions | Rich browser tooling |
+| Computer control | Explicit `AUTO`, one Agent/one turn, pause/emergency stop, exact 57-tool CUA catalog | Rich browser/desktop tooling |
 | Projection status (tokens/context/stats/plan/todos) | Short footer + `/session-info` | Rich panels |
 | Themes | Abyss/Pearl + capability fallbacks | Browser theme system |
 | CJK and grapheme-safe editing | Yes, Windows Terminal validated | Browser text engine |
 | Image/media rendering | Metadata placeholder only | Rich media surfaces |
 | In-pane mouse editing | Click-to-caret and drag-select in the composer; click-to-focus and drag-copy in the transcript | Browser selection |
 | Transcript search, multi-root dashboard | Not in v1 | Available or better suited to Web UI |
-| Chrome attach, desktop control and DOM slots | Deliberately not used | Native architecture |
+| Existing-profile attach and unrestricted CUA | Deliberately not granted | Native architecture |
 
 ## Development
 
@@ -189,12 +195,12 @@ npm run test:ac:all
 The full local acceptance requires the exact `0.1.6-alpha.2` launcher. Install it side by side; do not replace the daily launcher before the gate passes:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\prepare-browser-host.ps1
-npm run test:ac:browser
-npm run test:gate:browser
+powershell -ExecutionPolicy Bypass -File .\scripts\prepare-computer-host.ps1
+npm run test:ac:computer
+npm run test:gate:computer
 ```
 
-`scripts/with-browser-host.ps1` prepends `.browser-host` to `PATH` for one command. `npm run test:browser:pty` drives the real provider against a local HTTP fixture: pause-after-approval, navigation, reject/allow click, ordinary/sensitive input, screenshot attachment, RCE rejection, two-Agent isolation and process cleanup. The source `.alpha2-host`, alpha.1 prefix and Harness checkout remain untouched.
+`scripts/with-computer-host.ps1` prepends `.computer-host` to `PATH` for one command. `npm run test:computer:pty` drives the real Provider against dedicated WinForms and local HTTP fixtures, checks catalog/lease/cleanup invariants, and accepts browser launch only when 0.28.2's own signed-path and ACL attestation succeeds. The source `.alpha2-host`, `.browser-host`, alpha.1 prefix and Harness checkout remain untouched.
 
 `npm run test:timer` is a local-only end-to-end check of the elapsed-time chip: a read-only `--patch` overlay adds a driver that opens and closes two real turns on the real session clock, and the probe asserts the footer counted up once a second while a turn was open and then stated the conversation total that matches the logged spans. Like the check below, it edits nothing under `$DSH_HOME` and deletes the session its own probe created.
 
@@ -212,8 +218,10 @@ npm run test:gate:browser
 - Multi-line dsh command output (like `/goal`'s status view) folds onto the one-line status footer; re-run the command to read the full text.
 - `@` remains ordinary prompt text; files and richer attachment pickers need an explicit TUI interaction design before the newer host capability is exposed.
 - Agent Teams is experimental and one Harness process must control a Team. Teammates cannot be deleted or retired in alpha.2; interrupt stops only the current turn and the identity remains.
-- Browser control is limited to the pinned Playwright MCP Chromium surface. Chrome attach, persistent browser profiles, Stagehand, Computer Use, desktop control, SSH workspaces and auto review remain disabled.
-- Passwords, verification codes, tokens, API keys and card security codes must be entered only after pausing the target Agent in visible Chrome. A click/navigation already delivered to the browser cannot be rolled back.
+- CUA acts on the real personal desktop; it does not provide per-Session window or filesystem isolation. The safety boundary is explicit arming, one global Agent lease, one model turn, `standard` driver authorization, pause and emergency stop.
+- The full pinned catalog includes process kill, clipboard, recording/replay, installation and persistent configuration tools. Arming authorizes them without per-action TUI prompts. Persistent side effects are not rolled back.
+- Existing browser Profile attachment is not granted. Isolated browser launch can still fail when Cua Driver cannot prove a vendor-signed installation tree is non-writable by the current token. Stagehand, Playwright Browser Use, SSH workspaces and multi-Agent concurrent control remain disabled.
+- Passwords, verification codes, tokens, API keys and card security codes should never be put in prompts. Pause the Agent before any manual secret entry. An OS/browser action already delivered cannot be undone.
 - Images render as attachment labels, not terminal pixels. The whale is a pre-generated ASCII asset.
 - No transcript-content search, multi-root dashboard, remote attach, ACP bridge, persistent per-command grants, or invented `/auto` policy.
 - Workflow/subagent views are read-only durable summaries. They do not dispatch concurrent root sessions.

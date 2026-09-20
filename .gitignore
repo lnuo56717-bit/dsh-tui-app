@@ -29,6 +29,9 @@ credentials.yaml
 .alpha-host/
 .alpha2-host/
 .browser-host/
+.computer-host/
+.m8-home/
+.m8-results/
 .playwright-mcp/
 assets/generated/
 *.tgz

@@ -1,6 +1,6 @@
 # dsh-tui dependency and contract provenance
 
-Status: dsh-tui `0.2.1`, upgraded for Harness `dsh-v0.1.6-alpha.2`. Audit date: 2026-09-19.
+Status: dsh-tui `0.2.2`, upgraded for Harness `dsh-v0.1.6-alpha.2` and Cua Driver `0.28.2`. Audit date: 2026-09-20.
 
 ## 1. Version lock
 
@@ -19,17 +19,16 @@ The release tag, rather than moving `master`, is the build authority. The alpha 
 | `@deepseek-ai/dsh-agent` | `0.1.6-alpha.2` | `sha512-XEOytfXmJG6dyHld3Np0IYRrVPJnuoKKx2yQ+o74a7cN89k+J61c33D7zIcDG5rLkF7sMNM608ZkhfCWJuTcjg==` |
 | `@deepseek-ai/dsh-agent-default-model` | `0.1.6-alpha.2` | `sha512-7ITZJOfabWE5D3kKS3Q7nn+TGqTgza1LlLmvXw/wUnDpzAIUzcleFHsAm5Ab9BKfMdpZGfBg0qTIkyFfCA4cBA==` |
 | `@deepseek-ai/dsh-attachment` | `0.1.6-alpha.2` | `sha512-dv3s/FrFuZwmcBfWzWozj9khlb8LrFSCgz/spGsEg6l9zka1Wu3ZkHDcE+CRsM+fyCD/z/jTClMOkQ2DIMw5wQ==` |
-| `@deepseek-ai/dsh-browser-use` | `0.1.6-alpha.2` | `sha512-AAVowmKUiO6GgG+ghXiokCkCmkw9CV6rXjTCfTAJdgbWs7OyfoQhG045krzpR5Aa9/GPA/7rxGa6ClsDc0Klyw==` |
 | `@deepseek-ai/dsh-cmdline` | `0.1.6-alpha.2` | `sha512-ovm0trBqB9hzqxJNYolmap7H9Dh/fqwOo7oj8z25rpJTQx9piCiuUu9r9iPYoRb9dKRKgPRVPgrYRQMfbyMLig==` |
+| `@deepseek-ai/dsh-computer-use` | `0.1.6-alpha.2` | `sha512-+TOcjPBsOPh06b+snRqWKmER3s75vPwDhM3++TbCTArmnPX8/+D8ZCzL0rYpZ6LUTObVbqQZsoSWY2wasAJkNg==` |
 | `@deepseek-ai/dsh-experimental-agent-team` | `0.1.6-alpha.2` | `sha512-V474u5Wk62g777o+89qbwzOxMTIwwoqTp2vmiSTBeSmY+NwTnKwVX0kgZoziu+6fATJ5DLMGv2JvNkx7ccmIRg==` |
-| `@deepseek-ai/dsh-experimental-browser-use-playwright-mcp` | `0.1.6-alpha.2` | `sha512-1pvPBbVxKxcvY/F4+7wQaTTnvq6SeNzFH/16kIo8Ick4qFj0t1R+cZqPDQt8ew9baRipfBVjjcH9gbKdZ+DwTQ==` |
-| `@deepseek-ai/dsh-experimental-browser-use-runtime` | `0.1.6-alpha.2` | `sha512-gnykv0IS3+ABQ4VrcXw8mbRQtHShQFv9ezqpJe8EAyKaziH7t4fvwKi5OJywPBjtg6PEe80Hd1TRg7k/qO+XnQ==` |
+| `@deepseek-ai/dsh-experimental-computer-use-cua-driver-mcp` | `0.1.6-alpha.2` | `sha512-FheLHW63pq5d6FpHqaRpQK+SXEGKM5KSbpJucTX0tu6ohvmuRSLcKWXkBkarekdboluUr7z404VvivsbvSB5xw==` |
 | `@deepseek-ai/dsh-experimental-tool-agent-team` | `0.1.6-alpha.2` | `sha512-c3msoysF/Sq5/teFXAa9NUFcwCUjeTn+NUSX9yDtbeN+Uf8xPoC1BKt3gecsvPq9gSGurF8qvTxWSUmWcgxxPg==` |
 | `@deepseek-ai/dsh-llm` | `0.1.6-alpha.2` | `sha512-kIQoqnD6jN3Z2qQ+gd0TrIwkEDfUZAPC3kkTUUv2yQm1GeDjB7JULwT1vGAKTbEqOhOpVfKhdp4wItpG5PclfA==` |
+| `@deepseek-ai/dsh-mcp-resources` | `0.1.6-alpha.2` | `sha512-U4s2gczWYsAFW8iTp7u+4Le7FaGYwEFTvgwRLFBPRZAz9/swHaJ8GKin6SAp2L4yRuq3wbo2ip+HWseIrvmAfA==` |
 | `@deepseek-ai/dsh-session` | `0.1.6-alpha.2` | `sha512-WQNriZEQb0ykg+SDvqvNbp/AmG/DnydY5YdkTm5u3ST+PNXSQDLkaFzlY2YFU6hEuzs1h0yGCw6qPVpVGDAm1g==` |
 | `@deepseek-ai/dsh-tools` | `0.1.6-alpha.2` | `sha512-twRy/AffES124neGEpDLHjOTgcmWi8HtisTdTIm1b144LdEUBfU604A5N65muE+GfECDzyDKK/jJeLGuosMx2w==` |
 | `@deepseek-ai/dsh-user-approval` | `0.1.6-alpha.2` | `sha512-PMV8LOBoO3xwXpxDHBhh7PHHSqxHCn8YmzTMeGA2VNCSsL4e4KHLuVMUKyhpsny6KdP8Y2GjBHaKg2ZxLuEbnA==` |
-| `@playwright/mcp` | `0.0.80` | `sha512-FOPXHm2SvFhAQylm10jMZ35B/SR2TaMLVkavAlwoG4N2qCb5RqbvhQYcu3zmXNyxR2DW0Ooxe+9XPVt5UjKRCQ==` |
 
 The committed `package-lock.json` is the complete transitive lock. All resolved `@deepseek-ai/dsh-*` packages in that graph are from the `0.1.6-alpha.2` line.
 
@@ -57,11 +56,13 @@ The committed `package-lock.json` is the complete transitive lock. All resolved 
 | Team sessions | live members are exact Agents; inactive members persist as Sessions | live read-only transcript attaches to the member stream; inactive transcript is read through a `SessionHandle` opened with `read` access and then closed |
 | Team task scopes | normalized advisory path prefixes plus overlap warnings, never locks | warnings are shown verbatim and the UI always states that every member shares the same cwd |
 | Human interaction routing | approvals/questions remain Agent-scoped | a 32-item FIFO accepts the active Lead and rostered teammates only; cards identify source member/session and permission changes target that exact Session |
-| Browser provider | official Browser Use registry plus Session-owned Playwright MCP resources in `mode: launch`, `--isolated` | the provider is loaded from the active Host and must resolve the Host's exact `dsh-scope` module; a second physical copy fails closed instead of leaking tools across Agents |
-| Browser lifecycle | one MCP/Chromium resource per live Agent; state crosses turns but is not persisted | no custom state format; release, switch and cold restore dispose the official resource and start clean |
-| Browser tools | pinned upstream catalog is 24 tools in `@playwright/mcp@0.0.80` | 5 observation tools pass, 18 actions ask every time, unsafe code and unknown tools deny; sensitive input targets require manual takeover |
-| Browser approval audit | `tools/pre-execute` `ask` resolves through `approval/asked` + `approval/decided` inside the owning turn | a monotonic guard matches exact call/tool/id, tolerates interleaved FIFO decisions, and rechecks pause/sensitive/unknown policy before dispatch |
-| Browser screenshots | MCP image results use the Harness attachment pipeline | image-capable routes receive the attachment; the terminal shows its ordinary attachment label and never fabricates pixels |
+| Computer provider | official Computer Use registry plus Cua Driver MCP Provider; Provider lifetime owns the exclusive official registration | dynamically mounted only in the armed Agent's `agent.ctx`; the Provider must resolve the Host's exact `dsh-scope` and `dsh-tools` modules |
+| Driver authorization | Cua Driver `0.28.2` daemon in immutable `standard` mode | launcher strips inherited manifests/policies/grants and never passes unrestricted, bypass-approval, or existing-profile authorization flags |
+| CUA catalog | the installed 0.28.2 MCP endpoint exposes 57 tools; the released list includes the additional `debug_window_info` tool | exact set equality is checked before availability and again after scoped registration; any addition, omission or rename fails closed |
+| Lease lifecycle | official Provider can be mounted/unmounted; Cua desktop state is process-local | one global Agent lease, five-minute unused next-turn timeout, one-turn binding, cleanup on end/cancel/release/switch/exit, and no custom durable state |
+| CUA dispatch | ordinary Harness tool pipeline plus Driver's own `standard` authorization | all exact pinned tools return TUI `allow` only for the active owner; no `approval/asked` is generated; wrong Agent, pending, paused, stopping and unknown tools deny |
+| Screenshots | MCP image results use the Harness attachment pipeline | image-capable routes receive the attachment; the terminal shows its ordinary attachment label and never fabricates pixels |
+| Browser posture | Cua Driver separately attests vendor signature, trusted Program Files ancestry and current-token non-writability; existing Profile needs an explicit driver grant/host | dsh-tui grants neither attach nor unrestricted mode; safe Driver refusals are surfaced unchanged and never bypassed |
 
 `src/harness-compat.ts` is deliberately the only production location that materializes a full live Session snapshot. Harness marks synchronous reads deprecated but has not yet published an asynchronous attached-consumer full-log replacement. Keeping the call isolated makes that future migration mechanical.
 
@@ -76,10 +77,22 @@ The decoder cannot write old rows and is not used for healthy v3 logs. A malform
 ## 5. Upgrade boundary
 
 - No file in `D:\deepseek-harness` is modified.
-- The source package never rewrites the global launcher by itself. `scripts/install-browser-command.ps1` is an explicit post-gate action and first preserves the working 0.2.0 wrapper as `dsh.cmd.pre-0.2.0`; `scripts/rollback-0.2.0.ps1` restores it.
+- The source package never rewrites the global launcher by itself. `scripts/install-computer-command.ps1` is an explicit post-gate action and first preserves the working 0.2.1 wrapper as `dsh.cmd.pre-0.2.1`; `scripts/rollback-0.2.1.ps1` restores it.
 - Full v3 streaming and Team behavior requires the exact `0.1.6-alpha.2` host. The compatibility bridge can render legacy durable chunks, but it cannot manufacture Team services on an older launcher.
-- Agent Teams remains enabled with its official fixed delegation policy and shared-cwd semantics. Browser Use is limited to visible isolated launch; attach, persistent browser state, Stagehand, Computer Use, desktop control, remote workspaces and auto review remain disabled.
-- A side-by-side `.browser-host` is copied from `.alpha2-host`, then receives only the pinned Browser Use dependencies with `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`. Runtime identity checks and the Browser PTY gate prove two-Agent isolation before promotion. The source alpha.2 and alpha.1 prefixes plus wrapper, Profile-manifest and credential backups remain rollback paths.
+- Agent Teams remains enabled with its official fixed delegation policy and shared-cwd semantics. Playwright Browser Use is removed from the default composition; Cua Driver is the only browser/desktop automation path. Existing-profile grants, unrestricted mode, Stagehand, remote workspaces and auto review remain disabled.
+- A side-by-side `.computer-host` is copied from `.alpha2-host`, then receives only the pinned Computer Use dependencies. Runtime identity checks and the Computer PTY gate prove scoped one-Agent ownership before promotion. `.browser-host`, the source alpha.2/alpha.1 prefixes, wrapper backups, Profile manifests and credential backups remain rollback paths.
+
+### Cua Driver release integrity
+
+| Artifact | Locked value |
+|---|---|
+| Release tag | `cua-driver-rs-v0.28.2` (`fc188250b4ca8549b8e61f937fdb1fb560770e86`) |
+| Official Windows installer SHA-256 | `3e770fa8c351b80db99ae6b080f696a22f844534498bf44d45816cbd05eb0c3f` |
+| Official `_install-common.psm1` SHA-256 | `324bca98ad19f0487d4afd36a9e2d06478fcfb8e1e20225cdd8ec8ef5150e720` |
+| Windows x86_64 release ZIP SHA-256 | `3c1fcf10ff9513b94e4af78ad6a216ab62aa95b2c9a3b70dfbdba9f04e021533` |
+| Installed catalog | 57 MCP tools; `cua-driver list-tools` and real MCP `tools/list` agree |
+
+The task specification expected 56 tools, but the immutable official 0.28.2 binary exposes 57. The implementation follows the artifact rather than silently omitting `debug_window_info`. The installer transport substitution is applied only after the official installer hash and exact source seam are verified; it replaces a hanging Windows PowerShell download with Node TLS while leaving official version selection, extraction, junction, registration and rollback retention logic intact.
 
 ## 6. Chafa-generated DeepSeek whale
 

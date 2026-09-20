@@ -11,7 +11,7 @@ export const name = 'tui-runner'
 export const inject = [
   'tuiStartup', 'agentDefaultModel', 'agents', 'sessions', 'approval', 'userQuestions', 'commands',
   'permissionPresets', 'sessionPersistence', 'sessionTitle', 'sessionProjections', 'subagents', 'agentTeams', 'llm',
-  'tuiBrowserControl',
+  'tuiComputerControl',
 ]
 
 export interface Config {

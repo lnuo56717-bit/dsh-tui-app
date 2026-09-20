@@ -19,7 +19,7 @@ function sharedSnapshot() {
 
 const before = sharedSnapshot()
 const help = spawnSync('cmd.exe', ['/d', '/s', '/c', 'dsh --help'], { cwd: root, encoding: 'utf8' })
-const tuiHelp = spawnSync('cmd.exe', ['/d', '/s', '/c', 'dsh --profile tui --help'], { cwd: root, encoding: 'utf8' })
+const tuiHelp = spawnSync('cmd.exe', ['/d', '/s', '/c', 'dsh --profile tui-computer --help'], { cwd: root, encoding: 'utf8' })
 const wrapper = readFileSync('D:\\Apps\\npm-global\\dsh.cmd', 'utf8')
 let capture = ''
 let sentQuit = false
@@ -47,7 +47,7 @@ const report = {
   terminalRestored: capture.includes('\u001B[?1049h') && capture.includes('\u001B[?1049l'),
   explicitHelpPreserved: help.status === 0 && help.stdout.includes('Usage: dsh [') && help.stdout.includes('plugin --profile'),
   explicitTuiHelpWorks: tuiHelp.status === 0 && tuiHelp.stdout.includes('--theme <name>'),
-  wrapperHasNoArgumentBranch: wrapper.includes('if "%~1"==""') && wrapper.includes('--profile tui'),
+  wrapperHasNoArgumentBranch: wrapper.includes('if "%~1"==""') && /--profile tui(?:-computer)?\b/u.test(wrapper),
   sharedRepoUnchanged: before === after,
 }
 writeFileSync(join(results, 'default-command.json'), JSON.stringify(report, null, 2) + '\n')
