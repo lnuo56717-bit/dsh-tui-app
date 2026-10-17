@@ -6,7 +6,7 @@ import type { InteractionController, RuntimeSnapshot } from '../../src/interacti
 import { TranscriptStore } from '../../src/transcript-store.js'
 import { Shell } from '../../src/ui/app.js'
 
-function harness(agentStatus: RuntimeSnapshot['agentStatus']) {
+function harness(agentStatus: RuntimeSnapshot['agentStatus'], maxFps = 30) {
   const chunks: string[] = []
   const stdout = new Writable({ write(chunk, _encoding, done) { chunks.push(String(chunk)); done() } }) as unknown as NodeJS.WriteStream
   stdout.columns = 100
@@ -40,7 +40,7 @@ function harness(agentStatus: RuntimeSnapshot['agentStatus']) {
   const instance = render(<Shell theme="abyss" color="mono" controller={controller} stdout={stdout} />, {
     stdout, stdin, patchConsole: false, exitOnCtrlC: false,
     // CI runners default Ink to non-interactive, which defers frame writes to unmount.
-    interactive: true,
+    interactive: true, maxFps,
   })
   return { stdin, instance, calls, chunks, frame(): string {
     return (chunks.filter(chunk => chunk.includes('⌁')).at(-1) ?? '').replaceAll(/\u001B\[[0-?]*[ -/]*[@-~]/gu, '')
@@ -81,7 +81,8 @@ describe('interrupting a running turn', () => {
   })
 
   it('Enter sends the draft and a second Enter takes over with it', async () => {
-    const app = harness('running')
+    // Keep painting slower than input callbacks to exercise the CI race.
+    const app = harness('running', 5)
     try {
       await untilFrame(app, 'FOLLOW-UP')
       app.stdin.write('继续')
@@ -90,6 +91,8 @@ describe('interrupting a running turn', () => {
       await untilCount(app, 'submits', 1)
       expect(app.calls.cancels).toBe(0)
       // The sent draft arms the take-over hint on the help line.
+      // A submit callback can run before React/Ink paints its next frame.
+      await untilFrame(app, 'Enter again or Esc to take over')
       expect(app.frame()).toContain('Enter again or Esc to take over')
       app.stdin.write('\r')
       await untilCount(app, 'takeOvers', 1)
@@ -124,7 +127,7 @@ describe('interrupting a running turn', () => {
     try {
       await untilFrame(app, 'FOLLOW-UP')
       app.stdin.write('\r')
-      await settle()
+      await untilFrame(app, 'Enter again to stop')
       expect(app.calls.cancels).toBe(0)
       expect(app.frame()).toContain('Enter again to stop')
       app.stdin.write('\r')
