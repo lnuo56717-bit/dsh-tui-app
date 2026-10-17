@@ -19,6 +19,7 @@ import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { loadClipboardImage, loadImageFile, unquotePath, type LoadedImage } from './image-input.js'
 import { VISION_MODEL_ID } from './vision-models.js'
 import { eventLikes, sessionEventLikes, sessionEvents } from './harness-compat.js'
+import { failureLabel, requestFailure } from './request-status.js'
 import {
   foldTeamActivity, TEAMMATE_NAME, teammatePrompt, teamTaskId,
   type TeamActivityItem, type TeamMemberView, type TeamServiceLike, type TeamTaskView, type TeamViewSnapshot,
@@ -191,6 +192,7 @@ type InteractionPending = ApprovalPending | QuestionsPending
 interface ApprovalContext {
   on(name: 'approval/request', listener: (request: ApprovalRequestLike, next: () => Promise<ApprovalOutcome>) => Promise<ApprovalOutcome>): () => void
   on(name: 'agent/status', listener: (payload: { agent: Agent; status: 'idle' | 'running' }) => void): () => void
+  on(name: 'session/event', listener: (session: Agent['session'], event: SessionEvent) => void): () => void
   on(name: 'user-questions/request', listener: (
     request: QuestionRequestLike,
     next: () => Promise<{ answers: QuestionAnswerItem[] }>,
@@ -421,6 +423,9 @@ export class InteractionController {
       scoped.on('approval/request', (request, next) => this.askApproval(request, next)),
       scoped.on('user-questions/request', (request, next) => this.routeQuestions(request, next)),
       scoped.on('agent/status', ({ agent, status }) => this.handleAgentStatus(agent, status)),
+      scoped.on('session/event', (session, event) => {
+        if (session === this.handle?.agent.session) this.handleTurnEvent(event)
+      }),
     )
     const questions = this.ctx.get('userQuestions') as QuestionService | undefined
     if (questions?.registerProvider !== undefined) {
@@ -542,6 +547,8 @@ export class InteractionController {
       permission: this.currentPermission(), notice, error: undefined,
       pendingImages: [], imageInput: this.imageInput,
     })
+    const lastTurnBoundary = sessionEvents(handle.agent.session).findLast(event => event.type === 'turn/start' || event.type === 'turn/end')
+    if (lastTurnBoundary?.type === 'turn/end' && lastTurnBoundary.data.reason.kind === 'error') this.handleTurnEvent(lastTurnBoundary)
     void this.refreshTeamSummary()
   }
 
@@ -587,13 +594,14 @@ export class InteractionController {
       content,
     }
     this.pendingImages = []
-    if (agent.status === 'running') this.runningDrafts.push({ text, images })
+    const wasRunning = agent.status === 'running'
+    if (wasRunning) this.runningDrafts.push({ text, images })
     else this.runningDrafts = []
     if (steer) agent.steer(message)
     else agent.followup(message)
     this.patch({
       agentStatus: agent.status,
-      notice: steer ? 'Steering current/next step' : agent.status === 'running' ? 'Follow-up queued' : 'Prompt sent',
+      notice: steer ? 'Steering current/next step' : wasRunning ? 'Follow-up queued' : 'Prompt sent',
       error: undefined,
       pendingImages: [],
     })
@@ -1412,6 +1420,16 @@ export class InteractionController {
   private handleAgentStatus(agent: Agent, status: 'idle' | 'running'): void {
     if (agent === this.handle?.agent || String(agent.id) === this.snapshot.sessionId) this.patch({ agentStatus: status })
     if (this.interactionSource(agent) !== undefined) void this.refreshTeamSummary()
+  }
+
+  private handleTurnEvent(event: SessionEvent): void {
+    if (event.type === 'turn/start') {
+      this.patch({ error: undefined, notice: 'Working…' })
+    } else if (event.type === 'turn/end') {
+      const reason = event.data.reason
+      if (reason.kind === 'error') this.patch({ error: `Turn failed · ${failureLabel(requestFailure(reason.error))}`, notice: undefined })
+      else this.patch({ error: undefined, notice: reason.kind === 'aborted' ? 'Turn cancelled' : 'Turn completed' })
+    }
   }
 
   private activeInteraction(): InteractionPending | undefined {

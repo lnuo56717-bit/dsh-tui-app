@@ -25,6 +25,8 @@ The real Computer PTY gate covers the exact 57-tool catalog, `standard` mode, ty
 
 Release verification on 2026-09-20 passed TypeScript check, all 45 test files / 180 tests, production build, npm audit with zero vulnerabilities, the complete legacy/Team/Computer gate, and the bare-`dsh` PTY check. The test harness also confirmed that the scoped `D:\deepseek-harness` snapshot was unchanged.
 
+The 2026-10-17 maintenance fix makes request failures visible: retries show their attempt count, backoff and cause, and settle on recovery, cancellation or terminal failure. A failed turn retains its redacted diagnostic and recovery hint, including after resume. Producer-declared skill catalogs and runtime snapshots are collapsed by default; select them and use `→` or Enter to inspect the original content. Human prompts and teammate messages stay visible. Verification passes all 190 tests and a local HTTP/real-Harness PTY regression at 80×24 and 120×40, including failed requests, resume and successful recovery without an API charge. Run it with `npm run test:request-status:pty`.
+
 The gate uses `.computer-host`, copied from the existing `.alpha2-host`, without modifying `.alpha2-host`, `.browser-host`, `.alpha-host` or the upstream checkout. Promotion preserves the complete 0.2.1 launcher as `dsh.cmd.pre-0.2.1`; older wrappers, Profile manifests and credential backups remain available too. Detailed hashes and seam decisions are in [PROVENANCE.md](PROVENANCE.md).
 
 <p align="center">

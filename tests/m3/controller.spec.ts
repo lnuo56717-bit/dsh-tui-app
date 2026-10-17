@@ -86,6 +86,53 @@ function fixture(over?: { imageInput?: boolean }) {
 }
 
 describe('M3 interaction controller', () => {
+  it('reports terminal failures for the active root Session and clears them on the next turn', async () => {
+    const fx = fixture()
+    const controller = new InteractionController(fx.ctx, 'abyss')
+    await controller.start()
+    const session = (controller as any).handle.agent.session
+    const emit = (source: unknown, event: unknown) => {
+      for (const handler of fx.handlers.get('session/event') ?? []) handler(source, event)
+    }
+    const end = { seq: 0, type: 'turn/end', data: { turn: 1, reason: { kind: 'error', error: { message: 'DeepSeek Messages transport failed', code: 'TRANSPORT' } } } }
+    emit({}, end)
+    expect(controller.getSnapshot().error).toBeUndefined()
+    emit(session, end)
+    expect(controller.getSnapshot()).toMatchObject({ error: 'Turn failed · [TRANSPORT] DeepSeek Messages transport failed', notice: undefined })
+    emit(session, { seq: 1, type: 'turn/start', data: { turn: 2 } })
+    expect(controller.getSnapshot()).toMatchObject({ error: undefined, notice: 'Working…' })
+    emit(session, { seq: 2, type: 'turn/end', data: { turn: 2, reason: { kind: 'completed' } } })
+    expect(controller.getSnapshot().notice).toBe('Turn completed')
+    await controller.dispose()
+  })
+
+  it('restates a persisted terminal failure when reopening its Session', async () => {
+    const fx = fixture()
+    const originalCreate = fx.ctx.get('agents')!.create.bind(fx.ctx.get('agents'))
+    ;(fx.ctx.get('agents') as any).create = async (options: CreateAgentOptions) => {
+      const handle = await originalCreate(options)
+      ;(handle.agent.session as any).events.push({ seq: 0, type: 'turn/end', data: { turn: 1, reason: { kind: 'error', error: { message: 'Connection timed out', code: 'TIMEOUT' } } } })
+      return handle
+    }
+    const controller = new InteractionController(fx.ctx, 'abyss')
+    await controller.start()
+    expect(controller.getSnapshot().error).toContain('[TIMEOUT] Connection timed out')
+    await controller.dispose()
+  })
+
+  it('does not confuse a synchronous idle-to-running first send with a queued follow-up', async () => {
+    const fx = fixture()
+    const controller = new InteractionController(fx.ctx, 'abyss')
+    await controller.start()
+    const agent = (controller as any).handle.agent
+    agent.followup = () => { agent.status = 'running' }
+    controller.submit('第一次发送')
+    expect(controller.getSnapshot().notice).toBe('Prompt sent')
+    controller.submit('追问')
+    expect(controller.getSnapshot().notice).toBe('Follow-up queued')
+    await controller.dispose()
+  })
+
   it('submits real user messages, resolves approvals, and answers structured questions', async () => {
     const fx = fixture()
     const controller = new InteractionController(fx.ctx, 'abyss')

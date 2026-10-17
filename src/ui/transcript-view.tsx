@@ -39,7 +39,7 @@ export function focusableBlocks(state: TranscriptState): TranscriptBlockRef[] {
         key: messageKey(node.id),
         kind: 'message' as const,
         nodeId: node.id,
-        label: node.role === 'user' ? 'prompt' : 'answer',
+        label: node.contextLabel ?? (node.role === 'user' ? 'prompt' : 'answer'),
         text: prose,
         running: node.streaming,
       }]),

@@ -5,6 +5,7 @@ import { presentReasoning } from './reasoning-view.js'
 import { redactSecretValue } from './secrets.js'
 import { THINKING_REST_GLYPH } from './timing.js'
 import { computerResultValue, computerToolDisplay } from '../computer-control.js'
+import { failureHint, failureLabel } from '../request-status.js'
 
 export type RowColor = 'text' | 'muted' | 'accent' | 'primary' | 'user' | 'success' | 'warning' | 'danger' | 'border'
 
@@ -240,6 +241,20 @@ function emitBlock(out: NodeRows, block: TranscriptBlock, width: number, indent:
 }
 
 function emitMessage(out: NodeRows, node: MessageNode, width: number, options: BuildOptions): void {
+  if (node.contextLabel !== undefined) {
+    const key = messageKey(node.id)
+    const expanded = options.expandedBlocks.has(key)
+    const focused = options.focusedBlockKey === key
+    out.push([{
+      text: takeCells(`${focused ? '›' : ' '} ${expanded ? '⌄' : '◇'} ${node.contextLabel} · ${expanded ? '← collapse' : '→ expand'}`, width).head,
+      color: focused ? 'accent' : 'muted',
+    }])
+    if (expanded) {
+      for (const block of node.blocks) emitBlock(out, block, Math.max(8, width - 2), 2, options.toolIndex)
+      out.blank()
+    }
+    return
+  }
   const user = node.role === 'user'
   const sourceSuffix = user && node.source !== 'user' ? ` · ${node.source}` : ''
   const focused = options.focusedBlockKey === messageKey(node.id)
@@ -351,7 +366,24 @@ function buildNodeRows(node: TranscriptNode, options: BuildOptions): TranscriptR
   else if (node.kind === 'workflow') emitWorkflow(out, node, width, options.compact)
   else if (node.kind === 'activity') {
     const color: RowColor = node.status === 'error' ? 'danger' : node.status === 'success' ? 'success' : 'accent'
-    out.push([{ text: takeCells(`· ${node.activity}  ${node.label}  ${node.status}`, width).head, color }])
+    if (node.activity === 'retry' && node.retry !== undefined) {
+      const attempt = `${node.retry.attempt}${node.retry.limit === undefined ? '' : `/${node.retry.limit}`}`
+      const phase = node.status === 'waiting' ? `backoff ${(node.retry.delayMs / 1_000).toFixed(1)}s · Esc cancels`
+        : node.status === 'running' ? 'requesting' : node.status === 'success' ? 'recovered' : node.status === 'cancelled' ? 'cancelled' : 'failed'
+      out.push([{ text: takeCells(`· Retry ${attempt} · ${phase}`, width).head, color }])
+      if (node.failure !== undefined && (node.status === 'waiting' || node.status === 'running')) {
+        emitPreformatted(out, failureLabel(node.failure), Math.max(8, width - 2), 2)
+      }
+    } else if (node.activity === 'error' && node.failure !== undefined) {
+      out.push([{ text: takeCells(`× ${node.label}`, width).head, color: 'danger' }])
+      const body = new NodeRows()
+      emitPreformatted(body, failureLabel(node.failure), Math.max(8, width - 2), 2)
+      for (const row of body.take()) out.push(row.map(segment => ({ ...segment, color: 'danger' })))
+      emitPreformatted(out, failureHint(node.failure), Math.max(8, width - 2), 2)
+      out.blank()
+    } else {
+      out.push([{ text: takeCells(`· ${node.activity}  ${node.label}  ${node.status}`, width).head, color }])
+    }
   } else {
     out.push([{
       text: `raw event #${node.seq} · ${node.eventType}  ${takeCells(safeJson(node.data), Math.max(0, width - displayWidth(node.eventType) - 22)).head}`,

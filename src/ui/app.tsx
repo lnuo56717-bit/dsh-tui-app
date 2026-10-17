@@ -1117,7 +1117,7 @@ export function Shell(props: ShellProps): React.JSX.Element {
   const transcriptFacts = takeCells(
     `  seq ${state.lastSeq < 0 ? '—' : state.lastSeq}`
     + `${state.gap === undefined ? '' : ` · resnapshot ${state.gap.expected}→${state.gap.received}`}`
-    + `${detailItem !== undefined ? '' : scroll > 0 ? ` · ↑ ${scroll} rows · End latest` : ' · live'}`,
+    + `${detailItem !== undefined ? '' : scroll > 0 ? ` · ↑ ${scroll} rows · End latest` : ` · ${runtime.error !== undefined ? 'failed' : runtime.agentStatus === 'running' ? 'live' : 'idle'}`}`,
     Math.max(0, transcriptWidth - 2 - displayWidth(transcriptHeading)),
   ).head
   const footerCells = Math.max(1, columns - margin * 2)

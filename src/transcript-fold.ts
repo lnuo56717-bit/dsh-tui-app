@@ -1,4 +1,5 @@
 import { expandAssistantStream, type AssistantStreamRecord } from '@deepseek-ai/dsh-llm'
+import { requestFailure, type RequestFailure } from './request-status.js'
 
 export interface EventLike {
   readonly type: string
@@ -25,6 +26,8 @@ export interface MessageNode {
   readonly seq: number
   readonly role: 'user' | 'assistant'
   readonly source: string
+  /** Internal source metadata, never guessed from the message's text. */
+  readonly contextLabel?: string
   readonly blocks: readonly TranscriptBlock[]
   readonly streaming: boolean
   readonly turn?: number
@@ -72,10 +75,14 @@ export interface ActivityNode {
   readonly kind: 'activity'
   readonly id: string
   readonly seq: number
-  readonly activity: 'command' | 'compaction' | 'hook' | 'retry'
+  readonly activity: 'command' | 'compaction' | 'hook' | 'retry' | 'error'
   readonly label: string
-  readonly status: 'running' | 'success' | 'error' | 'waiting'
+  readonly status: 'running' | 'success' | 'error' | 'waiting' | 'cancelled'
   readonly detail?: unknown
+  readonly turn?: number
+  readonly step?: number
+  readonly failure?: RequestFailure
+  readonly retry?: { readonly attempt: number; readonly limit?: number; readonly delayMs: number }
 }
 
 export interface RawNode {
@@ -470,6 +477,7 @@ function foldAssistantMessage(state: TranscriptState, event: EventLike): Transcr
   }
   const placed = placeSurface(next, event, nodeId)
   next = { ...next, ...placed }
+  next = settleRetries(next, number(data.turn), number(data.step), 'success')
   return next
 }
 
@@ -514,14 +522,32 @@ function foldUserMessage(state: TranscriptState, event: EventLike): TranscriptSt
   const message = record(event.data)
   const source = record(message.source)
   const teamSender = source.kind === 'team-message' ? string(source.senderName) : ''
+  const contextLabel = messageContextLabel(source)
   const node: MessageNode = {
     kind: 'message', id: `message:${event.seq}`, seq: event.seq, role: 'user',
     source: teamSender === '' ? string(source.kind, 'user') : `teammate ${teamSender}`,
     blocks: normalizeBlocks(message.content), streaming: false,
+    ...(contextLabel === undefined ? {} : { contextLabel }),
   }
   let next: TranscriptState = { ...state, lastSeq: event.seq, nodes: [...state.nodes, node] }
   next = { ...next, ...placeSurface(next, event, node.id) }
   return next
+}
+
+function messageContextLabel(source: Record<string, unknown>): string | undefined {
+  // Only producer-declared context folds. A human's quoted <system-reminder>
+  // and a teammate's relay remain ordinary, fully visible messages.
+  if (source.kind === 'user' || source.kind === 'team-message') return undefined
+  if (source.kind === 'skill-catalog' && source.form === 'catalog') {
+    return `Skill catalog · ${Array.isArray(source.entries) ? source.entries.length : 0} skills`
+  }
+  if (source.kind === 'plugin' && source.plugin === '@deepseek-ai/dsh-system-prompt' && source.form === 'snapshot') {
+    return `Runtime context · ${Array.isArray(source.sections) ? source.sections.length : 0} sections`
+  }
+  if (['instructions', 'catalog', 'snapshot', 'recall'].includes(string(source.form))) {
+    return `Context · ${string(source.form)} · ${string(source.kind, 'plugin')}`
+  }
+  return undefined
 }
 
 function foldToolCall(state: TranscriptState, event: EventLike): TranscriptState {
@@ -639,6 +665,38 @@ function foldActivity(state: TranscriptState, event: EventLike): TranscriptState
   return { ...state, lastSeq: event.seq, nodes: replaceNode(state.nodes, node) }
 }
 
+function foldRetry(state: TranscriptState, event: EventLike): TranscriptState {
+  const data = record(event.data)
+  const id = `activity:retry:${string(data.retryId, `retry-${event.seq}`)}`
+  const previous = state.nodes.find((node): node is ActivityNode => node.kind === 'activity' && node.id === id)
+  if (event.type === 'llm/retry-started') {
+    if (previous === undefined || previous.retry?.attempt !== number(data.retry)) return { ...state, lastSeq: event.seq }
+    return { ...state, lastSeq: event.seq, nodes: replaceNode(state.nodes, { ...previous, status: 'running' }) }
+  }
+  const node: ActivityNode = {
+    kind: 'activity', id, seq: previous?.seq ?? event.seq, activity: 'retry', label: 'Model request',
+    status: 'waiting', turn: number(data.turn), step: number(data.step),
+    failure: requestFailure(data.failure),
+    retry: {
+      attempt: number(data.retry), delayMs: number(data.delayMs),
+      ...(data.mode === 'normal' && typeof data.maxRetries === 'number' ? { limit: data.maxRetries } : {}),
+    },
+  }
+  return { ...state, lastSeq: event.seq, nodes: replaceNode(state.nodes, node) }
+}
+
+function settleRetries(state: TranscriptState, turn: number, step: number | undefined, status: ActivityNode['status']): TranscriptState {
+  let changed = false
+  const nodes = state.nodes.map(node => {
+    if (node.kind !== 'activity' || node.activity !== 'retry' || node.turn !== turn || step !== undefined && node.step !== step) return node
+    // A later failing step cannot change a retry that already recovered.
+    if (node.status !== 'waiting' && node.status !== 'running') return node
+    changed = true
+    return { ...node, status }
+  })
+  return changed ? { ...state, nodes } : state
+}
+
 /**
  * Fold a turn bracket into measured task time. Both boundaries carry the log's
  * own clock, so the span is read rather than sampled; an event that arrived
@@ -650,7 +708,19 @@ function foldTurnBoundary(state: TranscriptState, event: EventLike): TranscriptS
   const at = eventTime(event)
   // A new turn starts a new measurement. Its closing boundary keeps the final
   // sample visible while the completed conversation is idle.
-  const base = event.type === 'turn/start' ? withoutThroughput(state) : state
+  let base = event.type === 'turn/start' ? withoutThroughput(state) : state
+  if (event.type === 'turn/end') {
+    const reason = record(record(event.data).reason)
+    base = settleRetries(base, turn, undefined, reason.kind === 'error' ? 'error' : reason.kind === 'aborted' ? 'cancelled' : 'success')
+    if (reason.kind === 'error') {
+      const node: ActivityNode = {
+        kind: 'activity', id: `activity:error:${turn}:${event.seq}`, seq: event.seq,
+        activity: 'error', label: 'Turn failed', status: 'error', turn,
+        failure: requestFailure(reason.error),
+      }
+      base = { ...base, nodes: [...base.nodes, node] }
+    }
+  }
   const { open, ...settled } = state.timing
   if (event.type === 'turn/start') {
     return { ...base, lastSeq: event.seq, timing: at === undefined ? settled : { ...settled, open: { turn, startedAt: at } } }
@@ -715,9 +785,9 @@ export function foldTranscript(state: TranscriptState, event: EventLike): Transc
     case 'compaction/start':
     case 'compaction/end':
     case 'hook/invoked':
-    case 'hook/result':
+    case 'hook/result': return foldActivity(withoutThroughput(state), event)
     case 'llm/retry':
-    case 'llm/retry-started': return foldActivity(withoutThroughput(state), event)
+    case 'llm/retry-started': return foldRetry(withoutThroughput(state), event)
     case 'todo/write':
     case 'request/header':
     case 'request/context':
